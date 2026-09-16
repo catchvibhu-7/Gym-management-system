@@ -1,0 +1,135 @@
+const express = require('express');
+const { db } = require('../db');
+const { requireStaff } = require('../auth');
+const { initialsOf, daysAgo } = require('../utils');
+
+const router = express.Router();
+router.use(requireStaff());
+
+router.get('/inside', (req, res) => {
+  const rows = db.prepare(
+    `SELECT c.id, c.checked_in_at, COALESCE(m.name, d.name) name FROM checkins c
+     LEFT JOIN members m ON m.id = c.member_id
+     LEFT JOIN day_passes d ON d.id = c.day_pass_id
+     WHERE c.checked_out_at IS NULL AND c.checked_in_at >= datetime('now','-6 hours')
+     ORDER BY c.checked_in_at DESC`
+  ).all();
+  res.json({ count: rows.length, people: rows });
+});
+
+router.get('/feed', (req, res) => {
+  const rows = db.prepare(
+    `SELECT c.checked_in_at, c.method, COALESCE(m.name, d.name) name FROM checkins c
+     LEFT JOIN members m ON m.id = c.member_id
+     LEFT JOIN day_passes d ON d.id = c.day_pass_id
+     ORDER BY c.checked_in_at DESC LIMIT 20`
+  ).all();
+  res.json(rows.map((f) => ({
+    time: f.checked_in_at.slice(11, 16), name: f.name,
+    method: f.method === 'qr' ? 'QR' : f.method === 'fob' ? 'Fob' : 'Manual',
+  })));
+});
+
+router.get('/traffic', (req, res) => {
+  const rows = db.prepare(
+    `SELECT CAST(strftime('%H', checked_in_at) AS INTEGER) hr, COUNT(*) c
+     FROM checkins WHERE checked_in_at >= datetime('now','-28 days')
+     GROUP BY hr`
+  ).all();
+  const byHour = new Map(rows.map((r) => [r.hr, r.c]));
+  const max = Math.max(1, ...rows.map((r) => r.c));
+  const traffic = [];
+  for (let h = 6; h <= 20; h++) {
+    const count = byHour.get(h) || 0;
+    traffic.push({
+      hour: `${h}`.padStart(2, '0'),
+      barStyle: `width:100%;border-radius:4px 4px 0 0;background:${h === 18 ? '#137a5f' : '#c9cdc4'};height:${Math.max(4, Math.round((count / max) * 100))}%`,
+    });
+  }
+  res.json(traffic);
+});
+
+router.get('/access-stats', (req, res) => {
+  const total = db.prepare(`SELECT COUNT(*) c FROM checkins WHERE checked_in_at >= datetime('now','-28 days')`).get().c || 1;
+  const byMethod = db.prepare(
+    `SELECT method, COUNT(*) c FROM checkins WHERE checked_in_at >= datetime('now','-28 days') GROUP BY method`
+  ).all();
+  const labels = { qr: 'QR code', fob: 'Fob', manual: 'Manual (desk)' };
+  return res.json(Object.keys(labels).map((key) => {
+    const row = byMethod.find((r) => r.method === key);
+    const c = row ? row.c : 0;
+    return { label: labels[key], share: `${Math.round((c / total) * 100)}%`, note: `${c} check-ins / 4 weeks` };
+  }));
+});
+
+router.get('/lapsed', (req, res) => {
+  const rows = db.prepare(
+    `SELECT m.id, m.name, (SELECT MAX(checked_in_at) FROM checkins WHERE member_id = m.id) last_visit
+     FROM members m WHERE m.status IN ('active','past_due')`
+  ).all().filter((m) => !m.last_visit || daysAgo(m.last_visit) >= 14)
+    .sort((a, b) => (daysAgo(b.last_visit || '2000-01-01') - daysAgo(a.last_visit || '2000-01-01')))
+    .slice(0, 10);
+  res.json(rows.map((m) => ({
+    id: m.id, initials: initialsOf(m.name), name: m.name,
+    days: m.last_visit ? daysAgo(m.last_visit) : 999,
+  })));
+});
+
+function toggleMemberCheckin(member, method) {
+  if (member.status === 'frozen' || member.status === 'cancelled') {
+    return { error: `Access denied — membership is ${member.status}`, statusCode: 403 };
+  }
+  const open = db.prepare(
+    `SELECT * FROM checkins WHERE member_id = ? AND checked_out_at IS NULL ORDER BY id DESC LIMIT 1`
+  ).get(member.id);
+  if (open) {
+    db.prepare(`UPDATE checkins SET checked_out_at = datetime('now') WHERE id = ?`).run(open.id);
+    return { action: 'checked_out', name: member.name, initials: initialsOf(member.name) };
+  }
+  db.prepare(`INSERT INTO checkins (member_id, method) VALUES (?, ?)`).run(member.id, method);
+  const visitsThisMonth = db.prepare(
+    `SELECT COUNT(*) c FROM checkins WHERE member_id = ? AND checked_in_at >= date('now','start of month')`
+  ).get(member.id).c;
+  const plan = db.prepare(
+    `SELECT p.name FROM memberships mo JOIN plans p ON p.id = mo.plan_id WHERE mo.member_id = ? AND mo.status != 'cancelled' ORDER BY mo.id DESC LIMIT 1`
+  ).get(member.id);
+  return {
+    action: 'checked_in', name: member.name, initials: initialsOf(member.name),
+    plan: plan ? plan.name : (member.status === 'trial' ? 'Trial week' : '—'),
+    visitNo: visitsThisMonth,
+    note: member.status === 'past_due' ? 'Payment on file failed — send them to the desk after their workout.' : 'Have a great session.',
+  };
+}
+
+router.post('/scan-by-member', (req, res) => {
+  const { memberId } = req.body || {};
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);
+  if (!member) return res.status(404).json({ error: 'Member not found' });
+  const result = toggleMemberCheckin(member, 'manual');
+  if (result.error) return res.status(result.statusCode).json({ error: result.error });
+  res.json(result);
+});
+
+router.post('/scan', (req, res) => {
+  const { code } = req.body || {};
+  if (!code) return res.status(400).json({ error: 'Code required' });
+
+  const member = db.prepare('SELECT * FROM members WHERE qr_code = ? OR fob_code = ?').get(code, code);
+  if (member) {
+    const method = code === member.fob_code ? 'fob' : 'qr';
+    const result = toggleMemberCheckin(member, method);
+    if (result.error) return res.status(result.statusCode).json({ error: result.error });
+    return res.json(result);
+  }
+
+  const dayPass = db.prepare(`SELECT * FROM day_passes WHERE qr_code = ? AND remaining_visits > 0`).get(code);
+  if (dayPass) {
+    db.prepare(`UPDATE day_passes SET remaining_visits = remaining_visits - 1 WHERE id = ?`).run(dayPass.id);
+    db.prepare(`INSERT INTO checkins (day_pass_id, method) VALUES (?, 'qr')`).run(dayPass.id);
+    return res.json({ action: 'checked_in', name: dayPass.name, initials: initialsOf(dayPass.name), plan: 'Day pass', visitNo: 1, note: 'Welcome in — ask if they want a tour.' });
+  }
+
+  return res.status(404).json({ error: 'Code not recognized' });
+});
+
+module.exports = router;

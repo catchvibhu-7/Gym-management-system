@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge Room — Owner Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="login-view" class="login-wrap hidden">
+  <div class="login-card">
+    <h1>Forge Room</h1>
+    <p>Owner &amp; staff console</p>
+    <div id="login-error" class="login-error hidden"></div>
+    <form id="login-form">
+      <label class="field">Email
+        <input type="email" id="login-email" autocomplete="username" required>
+      </label>
+      <label class="field">Password
+        <input type="password" id="login-password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:11px;margin-top:6px">Log in</button>
+    </form>
+  </div>
+</div>
+
+<div id="app-shell" class="hidden">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">F</div>
+      <div>
+        <div class="brand-name">FORGE ROOM</div>
+        <div class="brand-sub">Strength Club</div>
+      </div>
+    </div>
+    <nav id="nav-root"></nav>
+    <div class="sidebar-bottom">
+      <button class="kiosk-btn" id="open-kiosk-btn">
+        Open door kiosk
+        <small>QR + fob check-in</small>
+      </button>
+      <div class="who-am-i">
+        <div class="avatar-sm" id="whoami-initials"></div>
+        <div class="who-am-i-text">
+          <b id="whoami-name"></b>
+          <span id="whoami-role"></span>
+        </div>
+        <button class="logout-btn" id="logout-btn">Log out</button>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div>
+        <h1 id="page-title">Today</h1>
+        <p id="page-subtitle"></p>
+      </div>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </header>
+    <div class="page" id="page-root"></div>
+  </main>
+</div>
+
+<div id="modal-root"></div>
+<div id="kiosk-root"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
