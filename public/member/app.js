@@ -16,6 +16,53 @@
   function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+  function toast(message, type = 'info') {
+    let root = document.getElementById('toast-root');
+    if (!root) { root = document.createElement('div'); root.id = 'toast-root'; document.body.appendChild(root); }
+    const t = el(`<div class="toast ${type}">${esc(message)}</div>`);
+    root.appendChild(t);
+    setTimeout(() => { t.classList.add('leaving'); setTimeout(() => t.remove(), 150); }, 3200);
+  }
+
+  function confirmDialog(body, confirmLabel = 'Confirm') {
+    return new Promise((resolve) => {
+      const overlay = el(`<div class="confirm-overlay">
+        <div class="confirm-card">
+          <p>${esc(body)}</p>
+          <div class="confirm-actions">
+            <button class="btn btn-outline" data-role="cancel">Cancel</button>
+            <button class="btn btn-primary" data-role="confirm">${esc(confirmLabel)}</button>
+          </div>
+        </div>
+      </div>`);
+      document.body.appendChild(overlay);
+      const finish = (v) => { overlay.remove(); resolve(v); };
+      overlay.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(false));
+      overlay.querySelector('[data-role="confirm"]').addEventListener('click', () => finish(true));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+    });
+  }
+
+  async function withBusy(btn, fn) {
+    if (!btn) return fn();
+    btn.classList.add('is-busy'); btn.disabled = true;
+    try { return await fn(); } finally { btn.classList.remove('is-busy'); btn.disabled = false; }
+  }
+
+  function loadingBlock() { return '<div class="loading-block"><span class="spinner"></span>Loading…</div>'; }
+
+  function markInvalid(inputEl, message) {
+    inputEl.classList.add('invalid');
+    let msg = inputEl.parentElement.querySelector('.field-error');
+    if (!msg) { msg = el('<span class="field-error"></span>'); inputEl.parentElement.appendChild(msg); }
+    msg.textContent = message;
+    inputEl.addEventListener('input', () => {
+      inputEl.classList.remove('invalid');
+      const m = inputEl.parentElement.querySelector('.field-error');
+      if (m) m.remove();
+    }, { once: true });
+  }
+
   async function boot() {
     try {
       state.me = await api('/member/me');
@@ -65,7 +112,7 @@
     state.tab = tab;
     setActiveTab(tab);
     const content = document.getElementById('content');
-    content.innerHTML = '<div style="text-align:center;color:var(--muted);padding:30px 0">Loading…</div>';
+    content.innerHTML = loadingBlock();
     const fns = { home: tabHome, classes: tabClasses, plan: tabPlan, account: tabAccount };
     await (fns[tab] || tabHome)(content);
   }
@@ -105,14 +152,14 @@
       </div>`));
     }
 
-    document.getElementById('checkin-btn').addEventListener('click', async (e) => {
-      e.target.disabled = true;
+    const checkinBtn = document.getElementById('checkin-btn');
+    checkinBtn.addEventListener('click', async () => {
       try {
-        await api('/member/checkin', { method: 'POST' });
+        const r = await withBusy(checkinBtn, () => api('/member/checkin', { method: 'POST' }));
+        toast(r.action === 'checked_in' ? "You're checked in — have a great session." : 'Checked out. See you next time!', 'success');
         await tabHome(content);
       } catch (err) {
-        alert(err.message);
-        e.target.disabled = false;
+        toast(err.message, 'error');
       }
     });
   }
@@ -135,14 +182,14 @@
     }
     content.appendChild(card);
     card.querySelectorAll('[data-session]').forEach((b) => b.addEventListener('click', async () => {
-      b.disabled = true;
       try {
-        const r = await api(`/member/classes/${b.dataset.session}/book`, { method: 'POST' });
+        const r = await withBusy(b, () => api(`/member/classes/${b.dataset.session}/book`, { method: 'POST' }));
         b.textContent = r.status === 'booked' ? 'Booked' : 'Waitlisted';
         b.classList.add('booked');
+        b.disabled = true;
+        toast(r.status === 'booked' ? 'Class booked.' : "Added to the waitlist — you'll be notified if a spot opens.", 'success');
       } catch (err) {
-        alert(err.message);
-        b.disabled = false;
+        toast(err.message, 'error');
       }
     }));
   }
@@ -167,9 +214,15 @@
       content.appendChild(card);
     });
     content.querySelectorAll('[data-delete-plan]').forEach((b) => b.addEventListener('click', async () => {
-      if (!confirm('Delete this plan?')) return;
-      await api(`/member/workout-plans/${b.dataset.deletePlan}`, { method: 'DELETE' });
-      tabPlan(content);
+      const ok = await confirmDialog('Delete this plan? This can\'t be undone.', 'Delete plan');
+      if (!ok) return;
+      try {
+        await withBusy(b, () => api(`/member/workout-plans/${b.dataset.deletePlan}`, { method: 'DELETE' }));
+        toast('Plan deleted.', 'success');
+        tabPlan(content);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     }));
     document.getElementById('new-plan-btn').addEventListener('click', () => openPlanEditor(content));
   }
@@ -201,12 +254,15 @@
     }
     renderRows();
     wrap.querySelector('#plan-add-ex').addEventListener('click', () => { exercises.push({ name: '', sets: 3, reps: '10', weightNote: '' }); renderRows(); });
-    wrap.querySelector('#plan-save').addEventListener('click', async () => {
-      const title = wrap.querySelector('#plan-title').value.trim();
+    const saveBtn = wrap.querySelector('#plan-save');
+    saveBtn.addEventListener('click', async () => {
+      const titleEl = wrap.querySelector('#plan-title');
+      const title = titleEl.value.trim();
       const errBox = wrap.querySelector('#plan-error');
-      if (!title) { errBox.textContent = 'Give your plan a title.'; errBox.classList.remove('hidden'); return; }
+      if (!title) { markInvalid(titleEl, 'Give your plan a title.'); return; }
       try {
-        await api('/member/workout-plans', { method: 'POST', body: { title, exercises: exercises.filter((e) => e.name.trim()) } });
+        await withBusy(saveBtn, () => api('/member/workout-plans', { method: 'POST', body: { title, exercises: exercises.filter((e) => e.name.trim()) } }));
+        toast('Plan saved.', 'success');
         tabPlan(content);
       } catch (err) {
         errBox.textContent = err.message; errBox.classList.remove('hidden');
@@ -229,6 +285,13 @@
       location.reload();
     });
   }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const overlay = document.querySelector('.confirm-overlay');
+      if (overlay) overlay.querySelector('[data-role="cancel"]').click();
+    }
+  });
 
   boot();
 })();

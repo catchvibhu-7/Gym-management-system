@@ -1,4 +1,7 @@
 node_modules/
-data/
+data/gym.db-shm
+data/gym.db-wal
+data/uploads/*
+!data/uploads/.gitkeep
 *.log
 .DS_Store

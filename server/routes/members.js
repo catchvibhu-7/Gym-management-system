@@ -17,8 +17,12 @@ function statusChip(status) {
   return `display:inline-block;font-size:11px;font-weight:700;letter-spacing:0.03em;padding:4px 9px;border-radius:999px;${map[status] || ''}`;
 }
 
+const SORT_COLUMNS = {
+  name: 'm.name', joined: 'm.joined_at', lastVisit: 'last_visit', status: 'm.status', plan: 'plan_name',
+};
+
 router.get('/', (req, res) => {
-  const { q = '', status = 'all' } = req.query;
+  const { q = '', status = 'all', page, limit = 20, sortBy = 'name', sortDir = 'asc' } = req.query;
   let sql = `SELECT m.*, mo.plan_id, p.name plan_name,
       (SELECT MAX(checked_in_at) FROM checkins WHERE member_id = m.id) last_visit
     FROM members m
@@ -28,16 +32,26 @@ router.get('/', (req, res) => {
   const params = [];
   if (q) { sql += ` AND m.name LIKE ?`; params.push(`%${q}%`); }
   if (status !== 'all') { sql += ` AND m.status = ?`; params.push(status); }
-  sql += ` ORDER BY m.name`;
-  const rows = db.prepare(sql).all(...params);
-  res.json(rows.map((m) => ({
+
+  const col = SORT_COLUMNS[sortBy] || SORT_COLUMNS.name;
+  const dir = sortDir === 'desc' ? 'DESC' : 'ASC';
+  sql += ` ORDER BY ${col} ${dir} NULLS LAST, m.name ASC`;
+
+  const allRows = db.prepare(sql).all(...params);
+  const total = allRows.length;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+  const rows = page ? allRows.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim) : allRows;
+
+  const items = rows.map((m) => ({
     id: m.id, name: m.name, initials: initialsOf(m.name),
     plan: m.plan_name || (m.status === 'trial' ? 'Trial week' : '—'),
     joined: m.joined_at.slice(0, 10),
     lastVisit: m.last_visit ? m.last_visit.slice(0, 16).replace('T', ' ') : 'Never',
     status: m.status.replace('_', ' '),
     chipStyle: statusChip(m.status),
-  })));
+  }));
+  res.json(page ? { items, total } : items);
 });
 
 router.get('/:id', (req, res) => {

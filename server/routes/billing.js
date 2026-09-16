@@ -36,19 +36,31 @@ router.get('/stats', (req, res) => {
   });
 });
 
+const SORT_COLUMNS = {
+  name: 'member_name', plan: 'plan_name', amount: 'i.amount_cents', date: 'i.due_date', status: 'i.status',
+};
+
 router.get('/invoices', (req, res) => {
-  const rows = db.prepare(
+  const { page, limit = 20, sortBy = 'date', sortDir = 'desc' } = req.query;
+  const col = SORT_COLUMNS[sortBy] || SORT_COLUMNS.date;
+  const dir = sortDir === 'asc' ? 'ASC' : 'DESC';
+  const allRows = db.prepare(
     `SELECT i.*, m.name member_name, p.name plan_name FROM invoices i
      JOIN members m ON m.id = i.member_id
      LEFT JOIN memberships mo ON mo.id = i.membership_id
      LEFT JOIN plans p ON p.id = mo.plan_id
      WHERE i.due_date >= date('now','start of month')
-     ORDER BY i.due_date DESC LIMIT 100`
+     ORDER BY ${col} ${dir} NULLS LAST, i.due_date DESC`
   ).all();
-  res.json(rows.map((i) => ({
+  const total = allRows.length;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+  const rows = page ? allRows.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim) : allRows.slice(0, 100);
+  const items = rows.map((i) => ({
     id: i.id, name: i.member_name, plan: i.plan_name || '—',
     amount: money(i.amount_cents), date: i.due_date, status: i.status, chipStyle: chip(i.status),
-  })));
+  }));
+  res.json(page ? { items, total } : items);
 });
 
 router.post('/invoices/:id/retry', (req, res) => {

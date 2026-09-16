@@ -1,6 +1,11 @@
 /* Forge Room — Owner Console */
 (() => {
-  const state = { staff: null, route: 'today', members: { q: '', status: 'all', selectedId: null }, wizard: null };
+  const state = {
+    staff: null, route: 'today',
+    members: { q: '', status: 'all', selectedId: null, page: 1, limit: 20, sortBy: 'name', sortDir: 'asc' },
+    billing: { page: 1, limit: 20, sortBy: 'date', sortDir: 'desc' },
+    wizard: null,
+  };
 
   // ---------- API ----------
   async function api(path, opts = {}) {
@@ -19,6 +24,61 @@
   function money(v) { return v; }
   function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+  // ---------- Toasts ----------
+  function toast(message, type = 'info') {
+    const root = document.getElementById('toast-root');
+    const t = el(`<div class="toast ${type}"><span>${esc(message)}</span><button class="toast-close" aria-label="Dismiss">×</button></div>`);
+    const remove = () => { t.classList.add('leaving'); setTimeout(() => t.remove(), 150); };
+    t.querySelector('.toast-close').addEventListener('click', remove);
+    root.appendChild(t);
+    setTimeout(remove, 4500);
+  }
+
+  // ---------- Confirm dialog (replaces window.confirm) ----------
+  function confirmDialog({ title = 'Are you sure?', body = '', confirmLabel = 'Confirm', danger = false } = {}) {
+    return new Promise((resolve) => {
+      const root = document.getElementById('modal-root');
+      root.innerHTML = '';
+      const overlay = el(`<div class="modal-overlay" id="confirm-overlay"><div class="modal modal-sm">
+        <div class="modal-header"><h2>${esc(title)}</h2></div>
+        <div class="modal-body confirm-body">${esc(body)}</div>
+        <div class="modal-footer">
+          <button class="btn" data-role="cancel">Cancel</button>
+          <button class="btn btn-primary" style="margin-left:auto${danger ? ';background:#a3221f' : ''}" data-role="confirm">${esc(confirmLabel)}</button>
+        </div>
+      </div></div>`);
+      root.appendChild(overlay);
+      const finish = (result) => { overlay.remove(); resolve(result); };
+      overlay.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(false));
+      overlay.querySelector('[data-role="confirm"]').addEventListener('click', () => finish(true));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+      overlay.querySelector('[data-role="confirm"]').focus();
+    });
+  }
+
+  // ---------- Button busy state ----------
+  async function withBusy(btn, fn) {
+    if (!btn) return fn();
+    btn.classList.add('is-busy'); btn.disabled = true;
+    try { return await fn(); } finally { btn.classList.remove('is-busy'); btn.disabled = false; }
+  }
+
+  // ---------- Inline field validation ----------
+  function markInvalid(inputEl, message) {
+    inputEl.classList.add('invalid');
+    let msg = inputEl.parentElement.querySelector('.field-error');
+    if (!msg) { msg = el('<span class="field-error"></span>'); inputEl.parentElement.appendChild(msg); }
+    msg.textContent = message;
+    inputEl.addEventListener('input', () => clearInvalid(inputEl), { once: true });
+  }
+  function clearInvalid(inputEl) {
+    inputEl.classList.remove('invalid');
+    const msg = inputEl.parentElement.querySelector('.field-error');
+    if (msg) msg.remove();
+  }
+
+  function loadingBlock() { return '<div class="loading-block"><span class="spinner"></span>Loading…</div>'; }
 
   // ---------- Nav ----------
   const NAV = [
@@ -140,10 +200,13 @@
   const topbarActions = document.getElementById('topbar-actions');
 
   function renderPage(route) {
-    pageRoot.innerHTML = '<div class="empty-state">Loading…</div>';
+    pageRoot.innerHTML = loadingBlock();
     topbarActions.innerHTML = '';
     const fns = { today: pageToday, members: pageMembers, attendance: pageAttendance, billing: pageBilling, plans: pagePlans, classes: pageClasses, team: pageTeam, reports: pageReports, reminders: pageReminders };
-    (fns[route] || pageToday)().catch((err) => { pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`; });
+    (fns[route] || pageToday)().catch((err) => {
+      pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
+      toast(err.message, 'error');
+    });
   }
 
   function setTopActions(buttons) {
@@ -221,31 +284,65 @@
   async function pageMembers() {
     setTopActions([el(`<button class="btn btn-primary" data-action="open-wizard">Add member</button>`)]);
     pageRoot.innerHTML = '';
+    const cols = [
+      { key: 'name', label: 'Member' }, { key: 'plan', label: 'Plan' },
+      { key: 'lastVisit', label: 'Last visit' }, { key: 'status', label: 'Status' },
+    ];
     const wrap = el(`<div class="grid-2" style="grid-template-columns:minmax(0,1fr) 320px;align-items:start"></div>`);
     const list = el(`<section class="card" style="overflow:hidden">
       <div class="search-bar">
         <input type="text" id="member-search" placeholder="Search name" value="${esc(state.members.q)}">
         ${['all', 'active', 'trial', 'past_due', 'frozen'].map((s) => `<button class="filter-btn${state.members.status === s ? ' active' : ''}" data-status="${s}">${s === 'all' ? 'All' : s.replace('_', ' ')}</button>`).join('')}
       </div>
-      <table class="data-table"><thead><tr><th>Member</th><th>Plan</th><th>Last visit</th><th>Status</th></tr></thead>
-      <tbody id="members-tbody"><tr><td colspan="4" class="empty-state">Loading…</td></tr></tbody></table>
+      <table class="data-table"><thead><tr>${cols.map((c) => `<th class="sortable" data-sort="${c.key}">${esc(c.label)}<span class="sort-arrow">▲</span></th>`).join('')}</tr></thead>
+      <tbody id="members-tbody"><tr><td colspan="4" class="empty-state"><span class="spinner"></span></td></tr></tbody></table>
+      <div id="members-pagination"></div>
     </section>`);
     const detail = el(`<aside class="card" id="member-detail" style="position:sticky;top:80px;overflow:hidden"><div class="empty-state">Select a member to see details.</div></aside>`);
     wrap.append(list, detail);
     pageRoot.appendChild(wrap);
 
+    function updateSortHeaders() {
+      list.querySelectorAll('th.sortable').forEach((th) => {
+        const active = th.dataset.sort === state.members.sortBy;
+        th.classList.toggle('active', active);
+        th.querySelector('.sort-arrow').textContent = active && state.members.sortDir === 'desc' ? '▼' : '▲';
+      });
+    }
+
+    let searchDebounce;
     async function loadList() {
-      const rows = await api(`/members?q=${encodeURIComponent(state.members.q)}&status=${state.members.status}`);
+      const s = state.members;
+      const params = new URLSearchParams({
+        q: s.q, status: s.status, page: s.page, limit: s.limit, sortBy: s.sortBy, sortDir: s.sortDir,
+      });
+      const { items, total } = await api(`/members?${params}`);
+      updateSortHeaders();
       const tbody = document.getElementById('members-tbody');
-      tbody.innerHTML = rows.length ? rows.map((m) => `
+      tbody.innerHTML = items.length ? items.map((m) => `
         <tr class="clickable" data-member-row="${m.id}">
           <td><div style="display:flex;align-items:center;gap:10px"><div class="avatar">${esc(m.initials)}</div>
             <div><div style="font-weight:600">${esc(m.name)}</div><div style="font-size:11.5px;color:var(--muted)">Since ${esc(m.joined)}</div></div></div></td>
           <td>${esc(m.plan)}</td><td class="mono" style="font-size:12.5px">${esc(m.lastVisit)}</td>
           <td><span class="chip" style="${esc(m.chipStyle)}">${esc(m.status)}</span></td>
         </tr>`).join('') : `<tr><td colspan="4" class="empty-state">No members match.</td></tr>`;
-      if (state.members.selectedId && rows.some((r) => r.id === state.members.selectedId)) {
-        loadDetail(state.members.selectedId);
+
+      const pager = document.getElementById('members-pagination');
+      const totalPages = Math.max(1, Math.ceil(total / s.limit));
+      const start = total === 0 ? 0 : (s.page - 1) * s.limit + 1;
+      const end = Math.min(total, s.page * s.limit);
+      pager.innerHTML = `<div class="pagination-bar">
+        <button class="page-nav-btn" data-page="prev" ${s.page <= 1 ? 'disabled' : ''}>‹</button>
+        <span><span class="page-range">${start}-${end}</span> of ${total}</span>
+        <button class="page-nav-btn" data-page="next" ${s.page >= totalPages ? 'disabled' : ''}>›</button>
+      </div>`;
+      pager.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => {
+        s.page += b.dataset.page === 'next' ? 1 : -1;
+        loadList();
+      }));
+
+      if (s.selectedId && items.some((r) => r.id === s.selectedId)) {
+        loadDetail(s.selectedId);
       }
     }
 
@@ -287,8 +384,23 @@
         </div>`;
     }
 
-    document.getElementById('member-search').addEventListener('input', (e) => { state.members.q = e.target.value; loadList(); });
-    list.querySelectorAll('[data-status]').forEach((b) => b.addEventListener('click', () => { state.members.status = b.dataset.status; loadList(); }));
+    document.getElementById('member-search').addEventListener('input', (e) => {
+      clearTimeout(searchDebounce);
+      const value = e.target.value;
+      searchDebounce = setTimeout(() => { state.members.q = value; state.members.page = 1; loadList(); }, 280);
+    });
+    list.querySelectorAll('[data-status]').forEach((b) => b.addEventListener('click', () => {
+      state.members.status = b.dataset.status; state.members.page = 1;
+      list.querySelectorAll('[data-status]').forEach((x) => x.classList.toggle('active', x === b));
+      loadList();
+    }));
+    list.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
+      const s = state.members;
+      if (s.sortBy === th.dataset.sort) { s.sortDir = s.sortDir === 'asc' ? 'desc' : 'asc'; }
+      else { s.sortBy = th.dataset.sort; s.sortDir = 'asc'; }
+      s.page = 1;
+      loadList();
+    }));
     list.addEventListener('click', (e) => {
       const row = e.target.closest('[data-member-row]');
       if (row) loadDetail(Number(row.dataset.memberRow));
@@ -332,31 +444,77 @@
 
   // ---------- Billing ----------
   async function pageBilling() {
-    const [stats, invoices] = await Promise.all([api('/billing/stats'), api('/billing/invoices')]);
+    const stats = await api('/billing/stats');
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<div class="grid-4">${stats.stats.map((s) => `
       <div class="stat-card"><div class="label">${esc(s.label)}</div><div class="value">${esc(s.value)}</div><div class="note">${esc(s.note)}</div></div>`).join('')}</div>`));
 
-    const failed = invoices.filter((i) => i.status === 'failed');
+    const failedCount = Number(stats.stats.find((s) => s.label === 'Failed payments')?.value || 0);
+    const cols = [
+      { key: 'name', label: 'Member' }, { key: 'plan', label: 'Plan' }, { key: 'amount', label: 'Amount' },
+      { key: 'date', label: 'Date' }, { key: 'status', label: 'Status' },
+    ];
     const table = el(`<section class="card" style="overflow:hidden">
-      <div class="card-header"><h2>This month's charges</h2><span class="count">${invoices.length} invoices, ${failed.length} failures</span></div>
-      <table class="data-table"><thead><tr><th>Member</th><th>Plan</th><th>Amount</th><th>Date</th><th>Status</th></tr></thead>
-      <tbody>${invoices.length ? invoices.map((i) => `<tr>
-          <td style="font-weight:600">${esc(i.name)}</td><td style="font-size:12.5px">${esc(i.plan)}</td>
-          <td class="mono" style="font-weight:600">${esc(i.amount)}</td><td class="mono" style="font-size:12px;color:var(--muted)">${esc(i.date)}</td>
-          <td><span class="chip" style="${esc(i.chipStyle)}">${esc(i.status)}</span>
-            ${i.status === 'failed' ? `<button class="btn-outline btn-sm" style="margin-left:8px" data-action="retry-invoice" data-id="${i.id}">Retry</button>` : ''}</td>
-        </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No invoices this month yet.</td></tr>`}</tbody>
-      </table></section>`);
+      <div class="card-header"><h2>This month's charges</h2><span class="count" id="billing-count"></span></div>
+      <table class="data-table"><thead><tr>${cols.map((c) => `<th class="sortable" data-sort="${c.key}">${esc(c.label)}<span class="sort-arrow">▲</span></th>`).join('')}</tr></thead>
+      <tbody id="billing-tbody"><tr><td colspan="5" class="empty-state"><span class="spinner"></span></td></tr></tbody></table>
+      <div id="billing-pagination"></div>
+    </section>`);
     pageRoot.appendChild(table);
 
-    if (failed.length) {
+    if (failedCount) {
       pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-dark);color:#fff;display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:24px;align-items:center">
-        <div><h2 style="font-size:18px;color:#fff;margin-bottom:8px">Recover ${failed.length} failed payment${failed.length === 1 ? '' : 's'}</h2>
+        <div><h2 style="font-size:18px;color:#fff;margin-bottom:8px">Recover ${failedCount} failed payment${failedCount === 1 ? '' : 's'}</h2>
           <p style="margin:0;font-size:13px;color:#cfe8de;max-width:60ch;line-height:1.5">Retrying charges the same card on file. A member is set back to active automatically the moment their retry succeeds.</p></div>
         <button class="btn" style="background:#fff;border:none;color:var(--accent-dark);font-weight:700;padding:11px" data-action="retry-all">Retry all now</button>
       </section>`));
     }
+
+    function updateSortHeaders() {
+      table.querySelectorAll('th.sortable').forEach((th) => {
+        const active = th.dataset.sort === state.billing.sortBy;
+        th.classList.toggle('active', active);
+        th.querySelector('.sort-arrow').textContent = active && state.billing.sortDir === 'desc' ? '▼' : '▲';
+      });
+    }
+
+    async function loadInvoices() {
+      const s = state.billing;
+      const params = new URLSearchParams({ page: s.page, limit: s.limit, sortBy: s.sortBy, sortDir: s.sortDir });
+      const { items, total } = await api(`/billing/invoices?${params}`);
+      updateSortHeaders();
+      document.getElementById('billing-count').textContent = `${total} invoice${total === 1 ? '' : 's'} this month, ${failedCount} failure${failedCount === 1 ? '' : 's'}`;
+      document.getElementById('billing-tbody').innerHTML = items.length ? items.map((i) => `<tr>
+          <td style="font-weight:600">${esc(i.name)}</td><td style="font-size:12.5px">${esc(i.plan)}</td>
+          <td class="mono" style="font-weight:600">${esc(i.amount)}</td><td class="mono" style="font-size:12px;color:var(--muted)">${esc(i.date)}</td>
+          <td><span class="chip" style="${esc(i.chipStyle)}">${esc(i.status)}</span>
+            ${i.status === 'failed' ? `<button class="btn-outline btn-sm" style="margin-left:8px" data-action="retry-invoice" data-id="${i.id}">Retry</button>` : ''}</td>
+        </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No invoices this month yet.</td></tr>`;
+
+      const pager = document.getElementById('billing-pagination');
+      const totalPages = Math.max(1, Math.ceil(total / s.limit));
+      const start = total === 0 ? 0 : (s.page - 1) * s.limit + 1;
+      const end = Math.min(total, s.page * s.limit);
+      pager.innerHTML = `<div class="pagination-bar">
+        <button class="page-nav-btn" data-page="prev" ${s.page <= 1 ? 'disabled' : ''}>‹</button>
+        <span><span class="page-range">${start}-${end}</span> of ${total}</span>
+        <button class="page-nav-btn" data-page="next" ${s.page >= totalPages ? 'disabled' : ''}>›</button>
+      </div>`;
+      pager.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => {
+        s.page += b.dataset.page === 'next' ? 1 : -1;
+        loadInvoices();
+      }));
+    }
+
+    table.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
+      const s = state.billing;
+      if (s.sortBy === th.dataset.sort) { s.sortDir = s.sortDir === 'asc' ? 'desc' : 'asc'; }
+      else { s.sortBy = th.dataset.sort; s.sortDir = 'asc'; }
+      s.page = 1;
+      loadInvoices();
+    }));
+
+    await loadInvoices();
   }
 
   // ---------- Plans ----------
@@ -574,11 +732,19 @@
 
   async function wizardNext() {
     const w = state.wizard;
-    const hint = document.getElementById('wizard-hint');
     if (w.step === 1) {
-      if (!w.data.name.trim() || !w.data.phone.trim()) { if (hint) hint.textContent = 'Name and mobile are required.'; return; }
+      let ok = true;
+      const nameEl = document.getElementById('wz-name');
+      const phoneEl = document.getElementById('wz-phone');
+      if (!w.data.name.trim()) { markInvalid(nameEl, 'Name is required.'); ok = false; }
+      if (!w.data.phone.trim()) { markInvalid(phoneEl, 'Mobile is required.'); ok = false; }
+      if (!ok) return;
     }
-    if (w.step === 2 && !w.data.planId) { return; }
+    if (w.step === 2 && !w.data.planId) {
+      const hint = document.getElementById('wizard-hint');
+      if (hint) hint.textContent = 'Pick a plan to continue.';
+      return;
+    }
     w.step += 1;
     renderWizard();
   }
@@ -586,16 +752,18 @@
 
   async function wizardSubmit() {
     const w = state.wizard;
+    const btn = document.querySelector('[data-action="wizard-submit"]');
+    const hint = document.getElementById('wizard-hint');
     try {
-      await api('/members', { method: 'POST', body: {
+      await withBusy(btn, () => api('/members', { method: 'POST', body: {
         name: w.data.name, phone: w.data.phone, email: w.data.email || null,
         emergencyName: w.data.emergencyName || null, planId: w.data.planId, accessMethod: w.data.accessMethod,
-      } });
+      } }));
       w.step = 4;
       renderWizard();
+      toast(`${w.data.name} added.`, 'success');
       if (state.route === 'members' || state.route === 'today') renderPage(state.route);
     } catch (err) {
-      const hint = document.getElementById('wizard-hint');
       if (hint) hint.textContent = err.message;
     }
   }
@@ -623,14 +791,17 @@
         document.querySelectorAll('#dp-types .pick-btn').forEach((x) => x.classList.remove('selected'));
         b.classList.add('selected');
       }));
-      overlay.querySelector('[data-action="submit-day-pass"]').addEventListener('click', async () => {
-        const name = document.getElementById('dp-name').value.trim();
+      const submitBtn = overlay.querySelector('[data-action="submit-day-pass"]');
+      submitBtn.addEventListener('click', async () => {
+        const nameEl = document.getElementById('dp-name');
+        const name = nameEl.value.trim();
         const phone = document.getElementById('dp-phone').value.trim();
         const errBox = document.getElementById('dp-error');
-        if (!name) { errBox.textContent = 'Name is required.'; errBox.classList.remove('hidden'); return; }
+        if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
         try {
-          await api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType } });
+          await withBusy(submitBtn, () => api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType } }));
           closeModal();
+          toast(`Day pass sold to ${name}.`, 'success');
           if (state.route === 'plans') renderPage('plans');
         } catch (err) {
           errBox.textContent = err.message; errBox.classList.remove('hidden');
@@ -677,13 +848,16 @@
     }
     bindRows();
     document.getElementById('wp-add-row').addEventListener('click', () => { exercises.push({ name: '', sets: 3, reps: '10', weightNote: '' }); bindRows(); });
-    overlay.querySelector('[data-action="submit-workout-plan"]').addEventListener('click', async () => {
-      const title = document.getElementById('wp-title').value.trim();
+    const wpSubmitBtn = overlay.querySelector('[data-action="submit-workout-plan"]');
+    wpSubmitBtn.addEventListener('click', async () => {
+      const titleEl = document.getElementById('wp-title');
+      const title = titleEl.value.trim();
       const errBox = document.getElementById('wp-error');
-      if (!title) { errBox.textContent = 'Title is required.'; errBox.classList.remove('hidden'); return; }
+      if (!title) { markInvalid(titleEl, 'Title is required.'); return; }
       try {
-        await api('/workout-plans', { method: 'POST', body: { memberId, title, exercises: exercises.filter((e) => e.name.trim()) } });
+        await withBusy(wpSubmitBtn, () => api('/workout-plans', { method: 'POST', body: { memberId, title, exercises: exercises.filter((e) => e.name.trim()) } }));
         closeModal();
+        toast('Workout plan saved.', 'success');
         if (state.route === 'members') renderPage('members');
       } catch (err) {
         errBox.textContent = err.message; errBox.classList.remove('hidden');
@@ -822,36 +996,69 @@
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();
     else if (action === 'task-jump') { closeModalIfAny(); go('members'); }
-    else if (action === 'freeze-member') freezeMember(Number(a.dataset.member));
+    else if (action === 'freeze-member') freezeMember(Number(a.dataset.member), a);
     else if (action === 'send-reminder') sendReminder(Number(a.dataset.member), a);
-    else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id));
-    else if (action === 'retry-all') retryAll();
+    else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id), a);
+    else if (action === 'retry-all') retryAll(a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
   });
   function closeModalIfAny() { closeModal(); }
 
-  async function freezeMember(id) {
-    if (!confirm('Freeze this membership? Access pauses until manually resumed.')) return;
-    await api(`/members/${id}/freeze`, { method: 'POST' });
-    renderPage(state.route);
+  async function freezeMember(id, btnEl) {
+    const ok = await confirmDialog({
+      title: 'Freeze this membership?', danger: true, confirmLabel: 'Freeze membership',
+      body: 'Access pauses immediately and stays paused for 30 days, until manually resumed. The member will not be able to check in while frozen.',
+    });
+    if (!ok) return;
+    try {
+      await withBusy(btnEl, () => api(`/members/${id}/freeze`, { method: 'POST' }));
+      toast('Membership frozen.', 'success');
+      renderPage(state.route);
+    } catch (err) { toast(err.message, 'error'); }
   }
   async function sendReminder(id, btnEl) {
-    const r = await api(`/members/${id}/reminder`, { method: 'POST' });
-    btnEl.textContent = 'Queued';
-    btnEl.disabled = true;
+    try {
+      await withBusy(btnEl, () => api(`/members/${id}/reminder`, { method: 'POST' }));
+      btnEl.textContent = 'Queued';
+      btnEl.disabled = true;
+      toast('Reminder queued.', 'success');
+    } catch (err) { toast(err.message, 'error'); }
   }
-  async function retryInvoice(id) {
-    await api(`/billing/invoices/${id}/retry`, { method: 'POST' });
-    renderPage('billing');
+  async function retryInvoice(id, btnEl) {
+    try {
+      const r = await withBusy(btnEl, () => api(`/billing/invoices/${id}/retry`, { method: 'POST' }));
+      toast(r.succeeded ? 'Payment recovered.' : 'Retry failed — still needs attention.', r.succeeded ? 'success' : 'error');
+      renderPage('billing');
+    } catch (err) { toast(err.message, 'error'); }
   }
-  async function retryAll() {
-    await api('/billing/invoices/retry-all', { method: 'POST' });
-    renderPage('billing');
+  async function retryAll(btnEl) {
+    try {
+      const r = await withBusy(btnEl, () => api('/billing/invoices/retry-all', { method: 'POST' }));
+      toast(`Retried ${r.attempted}, recovered ${r.recovered}.`, r.recovered ? 'success' : 'error');
+      renderPage('billing');
+    } catch (err) { toast(err.message, 'error'); }
   }
   async function toggleAutomation(id) {
-    await api(`/automations/${id}/toggle`, { method: 'POST' });
-    renderPage('reminders');
+    try {
+      await api(`/automations/${id}/toggle`, { method: 'POST' });
+      renderPage('reminders');
+    } catch (err) { toast(err.message, 'error'); }
   }
+
+  // ---------- Keyboard shortcuts ----------
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (kioskRoot.firstElementChild) { closeKiosk(); return; }
+      if (modalRoot.firstElementChild) { closeModal(); return; }
+    }
+    if (e.key === 'Enter' && document.activeElement && document.activeElement.tagName === 'INPUT') {
+      const overlay = modalRoot.querySelector('.modal-overlay');
+      if (overlay && overlay.contains(document.activeElement)) {
+        const primary = overlay.querySelector('.modal-footer .btn-primary:not(:disabled)');
+        if (primary) { e.preventDefault(); primary.click(); }
+      }
+    }
+  });
 
   boot();
 })();
