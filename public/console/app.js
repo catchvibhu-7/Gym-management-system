@@ -806,6 +806,7 @@
   // ---------- Reminders ----------
   async function pageReminders() {
     const [automations, settings] = await Promise.all([api('/automations'), api('/settings')]);
+    state.automationsCache = automations;
     const connected = settings.notification_provider !== 'none';
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
@@ -816,7 +817,13 @@
           <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:600">${esc(a.name)}</div>
             <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-top:2px">${esc(a.desc)}</div>
             <div class="mono" style="font-size:11px;color:var(--muted-2);margin-top:6px">${esc(a.trigger)}</div></div>
-          <span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg)">${esc(a.channel)}</span>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            <div style="display:flex;gap:6px">
+              <span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg)">${esc(a.primaryChannel)}</span>
+              ${a.secondaryChannel ? `<span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg)">+ ${esc(a.secondaryChannel)}</span>` : ''}
+            </div>
+            ${['owner', 'manager'].includes(state.staff.role) ? `<button class="btn-quiet" style="font-size:11px" data-action="edit-automation-channels" data-id="${a.id}">Edit channels</button>` : ''}
+          </div>
         </div>`).join('')}
     </section>`));
     if (connected) {
@@ -1970,7 +1977,7 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
-    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay'];
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay'];
     if (!a) {
       if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;
@@ -1993,6 +2000,8 @@
     else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id), a);
     else if (action === 'retry-all') retryAll(a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
+    else if (action === 'edit-automation-channels') openAutomationChannelsModal(Number(a.dataset.id));
+    else if (action === 'submit-automation-channels') submitAutomationChannels(Number(a.dataset.id));
     else if (action === 'edit-member') openMemberEditModal(state.members.selectedId);
     else if (action === 'open-access-modal') openAccessModal();
     else if (action === 'regenerate-qr') regenerateQr(Number(a.dataset.id));
@@ -2083,6 +2092,46 @@
       await api(`/automations/${id}/toggle`, { method: 'POST' });
       renderPage('reminders');
     } catch (err) { toast(err.message, 'error'); }
+  }
+
+  function openAutomationChannelsModal(id) {
+    const a = (state.automationsCache || []).find((x) => x.id === id);
+    if (!a) return;
+    const CHANNELS = ['SMS', 'Email'];
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="automation-channels-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Edit channels</h2><p>${esc(a.name)}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Primary channel
+          <select id="auto-primary-channel">${CHANNELS.map((c) => `<option value="${c}" ${a.primaryChannel === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+        </label>
+        <label class="field">Secondary channel (optional)
+          <select id="auto-secondary-channel">
+            <option value="" ${!a.secondaryChannel ? 'selected' : ''}>None</option>
+            ${CHANNELS.map((c) => `<option value="${c}" ${a.secondaryChannel === c ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </label>
+        <p style="margin:12px 0 0;font-size:12px;color:var(--muted);line-height:1.5">If the primary channel fails to send, this automation falls back to the secondary.</p>
+        <div id="automation-channels-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-automation-channels" data-id="${id}">Save</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitAutomationChannels(id) {
+    const primaryChannel = document.getElementById('auto-primary-channel').value;
+    const secondaryChannel = document.getElementById('auto-secondary-channel').value || null;
+    const errBox = document.getElementById('automation-channels-error');
+    const btn = document.querySelector('[data-action="submit-automation-channels"]');
+    try {
+      await withBusy(btn, () => api(`/automations/${id}`, { method: 'PATCH', body: { primaryChannel, secondaryChannel } }));
+      closeModal();
+      toast('Channels updated.', 'success');
+      renderPage('reminders');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
   }
 
   // ---------- Keyboard shortcuts ----------

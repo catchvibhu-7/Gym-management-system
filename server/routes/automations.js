@@ -5,10 +5,13 @@ const { requireStaff } = require('../auth');
 const router = express.Router();
 router.use(requireStaff());
 
+const VALID_CHANNELS = ['SMS', 'Email'];
+
 router.get('/', (req, res) => {
   const rows = db.prepare('SELECT * FROM automations ORDER BY sort_order').all();
   res.json(rows.map((a) => ({
     id: a.id, name: a.name, desc: a.description, trigger: a.trigger_desc, channel: a.channel,
+    primaryChannel: a.primary_channel, secondaryChannel: a.secondary_channel,
     enabled: !!a.enabled,
     trackStyle: `position:relative;width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;background:${a.enabled ? '#137a5f' : '#dcded7'}`,
     knobStyle: `position:absolute;top:2px;left:${a.enabled ? 18 : 2}px;width:18px;height:18px;border-radius:999px;background:#fff;transition:left .15s`,
@@ -21,6 +24,17 @@ router.post('/:id/toggle', (req, res) => {
   if (!a) return res.status(404).json({ error: 'Not found' });
   db.prepare('UPDATE automations SET enabled = ? WHERE id = ?').run(a.enabled ? 0 : 1, a.id);
   res.json({ ok: true, enabled: !a.enabled });
+});
+
+router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const a = db.prepare('SELECT * FROM automations WHERE id = ?').get(req.params.id);
+  if (!a) return res.status(404).json({ error: 'Not found' });
+  const { primaryChannel, secondaryChannel } = req.body || {};
+  if (!VALID_CHANNELS.includes(primaryChannel)) return res.status(400).json({ error: 'Invalid primary channel' });
+  if (secondaryChannel && !VALID_CHANNELS.includes(secondaryChannel)) return res.status(400).json({ error: 'Invalid secondary channel' });
+  db.prepare('UPDATE automations SET primary_channel = ?, secondary_channel = ?, channel = ? WHERE id = ?')
+    .run(primaryChannel, secondaryChannel || null, primaryChannel, a.id);
+  res.json({ ok: true });
 });
 
 router.get('/message-stats', (req, res) => {
