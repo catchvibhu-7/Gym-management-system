@@ -35,6 +35,34 @@ Override with `OWNER_EMAIL` / `OWNER_PASSWORD` env vars, and `PORT` (default
   login first — it's meant to run on a tablet at the door that's already
   signed in).
 
+## Desktop app (Electron)
+
+The owner/staff console can also run as native desktop software instead of
+in a browser tab — a real window, taskbar icon, and installer. The
+member-facing app stays a normal web page (members use their own phone's
+browser at `http://<this-pc's-ip>:3300/member/`), since a phone app doesn't
+belong in a desktop package.
+
+```
+npm install
+npm run electron        # dev: launches the app window directly
+npm run electron:build  # produces a Windows installer in dist-electron/
+```
+
+`electron/main.js` starts the same Express server in-process (no separate
+`npm start` needed) and opens it in a native window. `View > Kiosk
+Fullscreen` (or F11) drops the window into fullscreen for a door-tablet
+setup. Closing the window shuts the embedded server down cleanly.
+
+`npm run electron:build` needs to run on the target OS (build a Windows
+installer from Windows) since electron-builder downloads platform-specific
+packaging tools on first run — it wasn't run inside this dev sandbox
+(no display, and a locked-down proxy that can't reach those downloads), so
+treat the packaged installer as unverified until you've run it once
+yourself. `build/icon.ico` / `build/icon.png` are placeholder branding
+(the green "F" mark from the console's sidebar) — swap them for real
+artwork whenever you have it.
+
 ## Architecture
 
 - `server/` — Express app, one file per concern. `db.js` opens the SQLite

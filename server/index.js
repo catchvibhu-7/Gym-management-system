@@ -38,8 +38,12 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3300;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Gym management server running on http://localhost:${PORT}`);
   console.log(`Owner console: http://localhost:${PORT}/console/`);
   console.log(`Member app:    http://localhost:${PORT}/member/`);
 });
+
+// Exported so the Electron desktop wrapper (electron/main.js) can embed
+// this server in-process and shut it down cleanly on app quit.
+module.exports = server;

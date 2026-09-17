@@ -3,5 +3,6 @@ data/gym.db-shm
 data/gym.db-wal
 data/uploads/*
 !data/uploads/.gitkeep
+dist-electron/
 *.log
 .DS_Store

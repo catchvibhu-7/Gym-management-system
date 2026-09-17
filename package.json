@@ -4,20 +4,53 @@
   "private": true,
   "description": "Local-first gym management system: SQLite backend, owner console, attendance kiosk, and member app.",
   "type": "commonjs",
-  "main": "server/index.js",
+  "main": "electron/main.js",
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon --watch server --ext js,sql server/index.js",
-    "seed": "node server/seed.js"
+    "seed": "node server/seed.js",
+    "electron": "electron .",
+    "electron:build": "electron-builder"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "express": "^4.19.2"
   },
   "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
     "nodemon": "^3.1.14"
+  },
+  "build": {
+    "appId": "com.forgeroom.ownerconsole",
+    "productName": "Forge Room Owner Console",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "build/icon.png"
+    }
   }
 }
