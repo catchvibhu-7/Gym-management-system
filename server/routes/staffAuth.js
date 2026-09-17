@@ -1,6 +1,6 @@
 const express = require('express');
 const { db } = require('../db');
-const { verifyPassword, createStaffSession, destroyStaffSession, requireStaff } = require('../auth');
+const { verifyPassword, createStaffSession, destroyStaffSession, requireStaff, ALL_STAFF_ROLES } = require('../auth');
 
 const router = express.Router();
 
@@ -20,7 +20,7 @@ router.post('/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', requireStaff(), (req, res) => {
+router.get('/me', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   res.json({ id: req.staff.id, name: req.staff.name, role: req.staff.role, access: req.staff.access });
 });
 

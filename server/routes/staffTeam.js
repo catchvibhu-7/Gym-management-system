@@ -6,8 +6,8 @@ const { initialsOf } = require('../utils');
 const router = express.Router();
 router.use(requireStaff());
 
-const ROLE_LABEL = { owner: 'Owner', manager: 'Manager', coach: 'Coach', desk: 'Desk staff' };
-const VALID_ROLES = ['owner', 'manager', 'coach', 'desk'];
+const ROLE_LABEL = { owner: 'Owner', manager: 'Manager', coach: 'Coach', desk: 'Desk staff', kiosk: 'Kiosk (door only)' };
+const VALID_ROLES = ['owner', 'manager', 'coach', 'desk', 'kiosk'];
 
 router.get('/', (req, res) => {
   const staff = db.prepare('SELECT * FROM staff WHERE active = 1 ORDER BY role, name').all();

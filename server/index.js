@@ -44,6 +44,7 @@ app.use('/api/member', require('./routes/memberApp'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/system', require('./routes/system'));
 app.use('/api/backup', require('./routes/backup'));
+app.use('/api/kiosk', require('./routes/kiosk'));
 
 app.get('/', (req, res) => res.redirect('/console/'));
 

@@ -180,6 +180,7 @@
   async function boot() {
     try {
       state.staff = await api('/staff/me');
+      if (state.staff.role === 'kiosk') { showKioskLocked(); return; }
       showApp();
     } catch (e) {
       showLogin();
@@ -189,6 +190,15 @@
   function showLogin() {
     document.getElementById('login-view').classList.remove('hidden');
     document.getElementById('app-shell').classList.add('hidden');
+  }
+
+  // A kiosk-role account has no console to show at all - it goes straight
+  // to the door check-in screen and stays there. Exit/logout is the only
+  // way out (see closeKiosk()'s role check below).
+  function showKioskLocked() {
+    document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('app-shell').classList.add('hidden');
+    openKiosk();
   }
 
   function showApp() {
@@ -223,7 +233,7 @@
     errBox.classList.add('hidden');
     try {
       state.staff = await api('/staff/login', { method: 'POST', body: { email, password } });
-      showApp();
+      if (state.staff.role === 'kiosk') { showKioskLocked(); } else { showApp(); }
     } catch (err) {
       errBox.textContent = err.message;
       errBox.classList.remove('hidden');
@@ -1451,7 +1461,7 @@
 
   function openStaffModal(staffId) {
     const editing = staffId ? (state.staffCache || []).find((s) => s.id === staffId) : null;
-    const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff']];
+    const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff'], ['kiosk', 'Kiosk (door only)']];
     modalRoot.innerHTML = '';
     const overlay = el(`<div class="modal-overlay" id="staff-overlay"><div class="modal modal-sm">
       <div class="modal-header"><div><h2>${editing ? 'Edit staff' : 'Add staff'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
@@ -1735,7 +1745,16 @@
   async function openKiosk() {
     await renderKioskIdle();
   }
-  function closeKiosk() { kioskRoot.innerHTML = ''; }
+  async function closeKiosk() {
+    if (state.staff && state.staff.role === 'kiosk') {
+      // A kiosk account has nothing behind this screen to return to -
+      // "exit" for it means signing out, not revealing the app shell.
+      await api('/staff/logout', { method: 'POST' });
+      location.reload();
+      return;
+    }
+    kioskRoot.innerHTML = '';
+  }
 
   async function renderKioskIdle() {
     const inside = await api('/checkins/inside');
@@ -1745,7 +1764,7 @@
         <div class="brand-mark">F</div><div class="brand-name" style="font-size:15px">FORGE ROOM</div>
         <div style="margin-left:auto;display:flex;align-items:center;gap:16px">
           <span class="mono" style="font-size:13px;color:var(--muted-2)" id="kiosk-clock"></span>
-          <button class="btn-outline" style="background:transparent;border-color:#33382f;color:#c9cdc4" data-action="close-kiosk">Exit kiosk</button>
+          <button class="btn-outline" style="background:transparent;border-color:#33382f;color:#c9cdc4" data-action="close-kiosk">${state.staff && state.staff.role === 'kiosk' ? 'Log out' : 'Exit kiosk'}</button>
         </div>
       </div>
       <div class="kiosk-mid">
@@ -1787,7 +1806,7 @@
         const q = searchInput.value.trim();
         const results = document.getElementById('kiosk-member-results');
         if (!q) { results.innerHTML = ''; return; }
-        const rows = await api(`/members?q=${encodeURIComponent(q)}`);
+        const rows = await api(`/kiosk/search-members?q=${encodeURIComponent(q)}`);
         results.innerHTML = rows.slice(0, 5).map((m) => `<button class="pick-btn" style="margin-bottom:6px;background:#16180f;border-color:#33382f;color:#fff" data-kiosk-member="${m.id}">${esc(m.name)}</button>`).join('') || '<div style="font-size:12px;color:var(--muted-2)">No match.</div>';
         results.querySelectorAll('[data-kiosk-member]').forEach((b) => b.addEventListener('click', async () => {
           await doScanByMemberId(Number(b.dataset.kioskMember));

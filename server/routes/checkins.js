@@ -1,12 +1,11 @@
 const express = require('express');
 const { db } = require('../db');
-const { requireStaff } = require('../auth');
+const { requireStaff, ALL_STAFF_ROLES } = require('../auth');
 const { initialsOf, daysAgo } = require('../utils');
 
 const router = express.Router();
-router.use(requireStaff());
 
-router.get('/inside', (req, res) => {
+router.get('/inside', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   const rows = db.prepare(
     `SELECT c.id, c.checked_in_at, COALESCE(m.name, d.name) name FROM checkins c
      LEFT JOIN members m ON m.id = c.member_id
@@ -17,7 +16,7 @@ router.get('/inside', (req, res) => {
   res.json({ count: rows.length, people: rows });
 });
 
-router.get('/feed', (req, res) => {
+router.get('/feed', requireStaff(), (req, res) => {
   const rows = db.prepare(
     `SELECT c.checked_in_at, c.method, COALESCE(m.name, d.name) name FROM checkins c
      LEFT JOIN members m ON m.id = c.member_id
@@ -30,7 +29,7 @@ router.get('/feed', (req, res) => {
   })));
 });
 
-router.get('/traffic', (req, res) => {
+router.get('/traffic', requireStaff(), (req, res) => {
   const rows = db.prepare(
     `SELECT CAST(strftime('%H', checked_in_at) AS INTEGER) hr, COUNT(*) c
      FROM checkins WHERE checked_in_at >= datetime('now','-28 days')
@@ -49,7 +48,7 @@ router.get('/traffic', (req, res) => {
   res.json(traffic);
 });
 
-router.get('/access-stats', (req, res) => {
+router.get('/access-stats', requireStaff(), (req, res) => {
   const total = db.prepare(`SELECT COUNT(*) c FROM checkins WHERE checked_in_at >= datetime('now','-28 days')`).get().c || 1;
   const byMethod = db.prepare(
     `SELECT method, COUNT(*) c FROM checkins WHERE checked_in_at >= datetime('now','-28 days') GROUP BY method`
@@ -62,7 +61,7 @@ router.get('/access-stats', (req, res) => {
   }));
 });
 
-router.get('/lapsed', (req, res) => {
+router.get('/lapsed', requireStaff(), (req, res) => {
   const rows = db.prepare(
     `SELECT m.id, m.name, (SELECT MAX(checked_in_at) FROM checkins WHERE member_id = m.id) last_visit
      FROM members m WHERE m.status IN ('active','past_due')`
@@ -107,7 +106,7 @@ function toggleMemberCheckin(member, method) {
   };
 }
 
-router.post('/scan-by-member', (req, res) => {
+router.post('/scan-by-member', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   const { memberId } = req.body || {};
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);
   if (!member) return res.status(404).json({ error: 'Member not found' });
@@ -116,7 +115,7 @@ router.post('/scan-by-member', (req, res) => {
   res.json(result);
 });
 
-router.post('/scan', (req, res) => {
+router.post('/scan', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   const { code } = req.body || {};
   if (!code) return res.status(400).json({ error: 'Code required' });
 

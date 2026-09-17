@@ -65,6 +65,13 @@ function destroyMemberSession(req, res) {
   res.clearCookie(MEMBER_COOKIE, { path: '/' });
 }
 
+// 'kiosk' is a locked-down role that only ever sees the door check-in
+// screen - it must never be swept in by a bare requireStaff() (which every
+// pre-existing route file uses to mean "any real staff member"). Routes the
+// kiosk role does need call requireStaff(...ALL_STAFF_ROLES) explicitly.
+const STAFF_ROLES = ['owner', 'manager', 'coach', 'desk'];
+const ALL_STAFF_ROLES = [...STAFF_ROLES, 'kiosk'];
+
 function requireStaff(...roles) {
   return (req, res, next) => {
     const token = req.cookies[STAFF_COOKIE];
@@ -74,7 +81,8 @@ function requireStaff(...roles) {
        WHERE ss.token = ? AND ss.expires_at > datetime('now') AND s.active = 1`
     ).get(token);
     if (!row) return res.status(401).json({ error: 'Session expired' });
-    if (roles.length && !roles.includes(row.role)) {
+    const allowed = roles.length ? roles : STAFF_ROLES;
+    if (!allowed.includes(row.role)) {
       return res.status(403).json({ error: 'Not allowed for your role' });
     }
     req.staff = row;
@@ -105,4 +113,6 @@ module.exports = {
   requireMember,
   STAFF_COOKIE,
   MEMBER_COOKIE,
+  STAFF_ROLES,
+  ALL_STAFF_ROLES,
 };
