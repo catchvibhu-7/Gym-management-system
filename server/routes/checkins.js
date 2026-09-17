@@ -1,7 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff, ALL_STAFF_ROLES } = require('../auth');
-const { initialsOf, daysAgo } = require('../utils');
+const { initialsOf, daysAgo, todayISO } = require('../utils');
 
 const router = express.Router();
 
@@ -78,6 +78,9 @@ function toggleMemberCheckin(member, method) {
   if (member.status === 'frozen' || member.status === 'cancelled') {
     return { error: `Access denied — membership is ${member.status}`, statusCode: 403 };
   }
+  if (member.status === 'trial' && member.trial_ends_at && member.trial_ends_at < todayISO()) {
+    return { error: 'Trial has ended — see the desk to join a plan.', statusCode: 403 };
+  }
   if (method === 'qr' && member.qr_suspended) {
     return { error: 'This QR code has been suspended — see the desk.', statusCode: 403 };
   }
@@ -100,7 +103,7 @@ function toggleMemberCheckin(member, method) {
   ).get(member.id);
   return {
     action: 'checked_in', name: member.name, initials: initialsOf(member.name),
-    plan: plan ? plan.name : (member.status === 'trial' ? 'Trial week' : '—'),
+    plan: plan ? plan.name : (member.status === 'trial' ? 'Trial' : '—'),
     visitNo: visitsThisMonth,
     note: member.status === 'past_due' ? 'Payment on file failed — send them to the desk after their workout.' : 'Have a great session.',
   };

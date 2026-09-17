@@ -47,7 +47,7 @@ router.get('/', (req, res) => {
 
   const items = rows.map((m) => ({
     id: m.id, name: m.name, initials: initialsOf(m.name),
-    plan: m.plan_name || (m.status === 'trial' ? 'Trial week' : '—'),
+    plan: m.plan_name || (m.status === 'trial' ? 'Trial' : '—'),
     joined: m.joined_at.slice(0, 10),
     lastVisit: m.last_visit ? m.last_visit.slice(0, 16).replace('T', ' ') : 'Never',
     status: m.status.replace('_', ' '),
@@ -80,10 +80,12 @@ router.get('/:id', (req, res) => {
   }
   res.json({
     id: m.id, name: m.name, initials: initialsOf(m.name), status: m.status,
-    plan: membership ? membership.plan_name : (m.status === 'trial' ? 'Trial week' : '—'),
+    plan: membership ? membership.plan_name : (m.status === 'trial' ? 'Trial' : '—'),
     joined: m.joined_at.slice(0, 10),
     visits: visits30, ltv: money(ltv),
-    nextCharge: membership ? `${membership.next_charge_date} · ${money(membership.monthly_price_cents)} (${periodInfo(membership.billing_period).label})` : '—',
+    nextCharge: membership
+      ? `${membership.next_charge_date} · ${money(membership.monthly_price_cents)} (${periodInfo(membership.billing_period).label})`
+      : (m.status === 'trial' && m.trial_ends_at ? `Trial ends ${m.trial_ends_at}` : '—'),
     access: m.access_method === 'qr_fob' ? 'QR + fob' : m.access_method === 'qr' ? 'QR only' : m.access_method === 'fob' ? 'Fob only' : 'Paused',
     accessMethod: m.access_method,
     phone: m.phone, email: m.email, emergency: m.emergency_name ? `${m.emergency_name} · ${m.emergency_phone}` : 'Not on file',
@@ -96,20 +98,30 @@ router.get('/:id', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { name, phone, email, emergencyName, emergencyPhone, planId, joiningFeeCents = 2500, accessMethod = 'qr' } = req.body || {};
+  const { name, phone, email, emergencyName, emergencyPhone, planId, joiningFeeCents = 2500, accessMethod = 'qr', isTrial = false } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
   const existing = db.prepare('SELECT id FROM members WHERE phone = ?').get(phone);
   if (existing) return res.status(409).json({ error: 'A member with this phone already exists' });
 
   const last4 = phone.replace(/\D/g, '').slice(-4) || '0000';
+  // A trial signup is never a real plan/membership/invoice - just a member
+  // record with a QR-only door code that expires after the configured
+  // trial length. Fob access and a paid plan are earned by actually joining.
+  const finalAccessMethod = isTrial ? 'qr' : accessMethod;
+  const trialDays = parseInt(settingsStore.get('trial_duration_days'), 10) || 3;
+  const trialEndsAt = isTrial ? db.prepare(`SELECT date('now', ?) d`).get(`+${trialDays} days`).d : null;
   const info = db.prepare(
-    `INSERT INTO members (name, phone, email, emergency_name, emergency_phone, status, access_method, fob_code, qr_code, pin_hash, joined_at)
-     VALUES (?,?,?,?,?, 'active', ?, ?, ?, ?, datetime('now'))`
-  ).run(name, phone, email || null, emergencyName || null, emergencyPhone || null, accessMethod,
-    accessMethod === 'fob' || accessMethod === 'qr_fob' ? newCode('FOB') : null, newCode('QR'), hashPassword(last4));
+    `INSERT INTO members (name, phone, email, emergency_name, emergency_phone, status, access_method, fob_code, qr_code, pin_hash, joined_at, trial_ends_at)
+     VALUES (?,?,?,?,?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+  ).run(
+    name, phone, email || null, emergencyName || null, emergencyPhone || null,
+    isTrial ? 'trial' : 'active', finalAccessMethod,
+    finalAccessMethod === 'fob' || finalAccessMethod === 'qr_fob' ? newCode('FOB') : null,
+    newCode('QR'), hashPassword(last4), trialEndsAt
+  );
 
   const memberId = info.lastInsertRowid;
-  if (planId) {
+  if (!isTrial && planId) {
     const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
     if (plan) {
       const gst = settingsStore.applyGst(plan.price_cents + joiningFeeCents);

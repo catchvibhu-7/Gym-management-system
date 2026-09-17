@@ -1099,8 +1099,12 @@
   function closeModal() { modalRoot.innerHTML = ''; }
 
   function openWizard() {
-    state.wizard = { step: 1, data: { name: '', phone: '', email: '', emergencyName: '', emergencyPhone: '', planId: null, accessMethod: 'qr' }, plans: [] };
-    api('/plans').then((plans) => { state.wizard.plans = plans; renderWizard(); });
+    state.wizard = { step: 1, data: { name: '', phone: '', email: '', emergencyName: '', emergencyPhone: '', planId: null, accessMethod: 'qr', isTrial: false }, plans: [], trialDays: 3 };
+    Promise.all([api('/plans'), api('/settings')]).then(([plans, settings]) => {
+      state.wizard.plans = plans;
+      state.wizard.trialDays = Number(settings.trial_duration_days) || 3;
+      renderWizard();
+    });
     modalRoot.innerHTML = '';
     modalRoot.appendChild(el(`<div class="modal-overlay" data-action="noop" id="wizard-overlay"></div>`));
     renderWizard();
@@ -1133,27 +1137,39 @@
         <button class="btn btn-primary" data-action="wizard-next">Continue</button>`;
     } else if (w.step === 2) {
       body.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-        ${w.plans.map((p) => `<button class="pick-btn ${w.data.planId === p.id ? 'selected' : ''}" data-plan="${p.id}">
+        <button class="pick-btn ${w.data.isTrial ? 'selected' : ''}" data-trial="1">
+            <span style="text-align:left;flex:1"><span style="display:block;font-size:13.5px;font-weight:700">Start a free trial</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:2px">${w.trialDays}-day trial, QR access only. No plan or charge yet.</span></span>
+            <span style="font-family:'Archivo Black',sans-serif;font-size:18px">Free</span></button>
+        ${w.plans.map((p) => `<button class="pick-btn ${!w.data.isTrial && w.data.planId === p.id ? 'selected' : ''}" data-plan="${p.id}">
             <span style="text-align:left;flex:1"><span style="display:block;font-size:13.5px;font-weight:700">${esc(p.name)}</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:2px">${esc(p.desc || '')}</span></span>
             <span style="font-family:'Archivo Black',sans-serif;font-size:18px">${esc(p.price)}</span></button>`).join('')}
       </div>`;
       footer.innerHTML = `<button class="btn" data-action="wizard-back">Back</button>
         <span style="margin-left:auto"></span><button class="btn btn-primary" data-action="wizard-next">Continue</button>`;
-      body.querySelectorAll('[data-plan]').forEach((b) => b.addEventListener('click', () => { w.data.planId = Number(b.dataset.plan); renderWizard(); }));
+      body.querySelectorAll('[data-plan]').forEach((b) => b.addEventListener('click', () => { w.data.planId = Number(b.dataset.plan); w.data.isTrial = false; renderWizard(); }));
+      const trialBtn = body.querySelector('[data-trial]');
+      if (trialBtn) trialBtn.addEventListener('click', () => { w.data.isTrial = true; w.data.planId = null; renderWizard(); });
     } else if (w.step === 3) {
-      body.innerHTML = `<div class="grid-2">
-        <button class="pick-btn ${w.data.accessMethod === 'qr' ? 'selected' : ''}" data-access="qr"><span style="display:block;font-weight:700;font-size:13.5px">QR only</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Member shows a code from their phone.</span></button>
-        <button class="pick-btn ${w.data.accessMethod === 'qr_fob' ? 'selected' : ''}" data-access="qr_fob"><span style="display:block;font-weight:700;font-size:13.5px">QR + fob</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Also issue a physical fob at the desk.</span></button>
-      </div>
-      <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">First charge runs today. The membership is created as soon as you save.</div>`;
+      if (w.data.isTrial) {
+        const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + w.trialDays);
+        const trialEndLabel = trialEnd.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        body.innerHTML = `<div class="pick-btn selected" style="pointer-events:none"><span style="display:block;font-weight:700;font-size:13.5px">QR only</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Trial members get a QR code only - no fob.</span></div>
+        <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">No plan or charge yet. Access expires automatically on ${trialEndLabel} unless they join a plan first.</div>`;
+      } else {
+        body.innerHTML = `<div class="grid-2">
+          <button class="pick-btn ${w.data.accessMethod === 'qr' ? 'selected' : ''}" data-access="qr"><span style="display:block;font-weight:700;font-size:13.5px">QR only</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Member shows a code from their phone.</span></button>
+          <button class="pick-btn ${w.data.accessMethod === 'qr_fob' ? 'selected' : ''}" data-access="qr_fob"><span style="display:block;font-weight:700;font-size:13.5px">QR + fob</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Also issue a physical fob at the desk.</span></button>
+        </div>
+        <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">First charge runs today. The membership is created as soon as you save.</div>`;
+        body.querySelectorAll('[data-access]').forEach((b) => b.addEventListener('click', () => { w.data.accessMethod = b.dataset.access; renderWizard(); }));
+      }
       footer.innerHTML = `<button class="btn" data-action="wizard-back">Back</button>
         <span style="margin-left:auto"></span><button class="btn btn-primary" data-action="wizard-submit">Add member</button>`;
-      body.querySelectorAll('[data-access]').forEach((b) => b.addEventListener('click', () => { w.data.accessMethod = b.dataset.access; renderWizard(); }));
     } else {
       body.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:30px 0">
         <div style="width:50px;height:50px;border-radius:999px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:22px;font-weight:700">✓</div>
         <h2 style="font-size:18px">${esc(w.data.name)} is in</h2>
-        <p style="margin:0;font-size:13px;color:var(--muted);max-width:40ch">Membership created. Their door code is ready in the kiosk.</p>
+        <p style="margin:0;font-size:13px;color:var(--muted);max-width:40ch">${w.data.isTrial ? `${w.trialDays}-day trial started. Their QR code is ready in the kiosk.` : 'Membership created. Their door code is ready in the kiosk.'}</p>
       </div>`;
       footer.innerHTML = `<button class="btn btn-primary" style="margin-left:auto" data-action="close-modal">Done</button>`;
     }
@@ -1178,9 +1194,9 @@
       if (!w.data.phone.trim()) { markInvalid(phoneEl, 'Mobile is required.'); ok = false; }
       if (!ok) return;
     }
-    if (w.step === 2 && !w.data.planId) {
+    if (w.step === 2 && !w.data.planId && !w.data.isTrial) {
       const hint = document.getElementById('wizard-hint');
-      if (hint) hint.textContent = 'Pick a plan to continue.';
+      if (hint) hint.textContent = 'Pick a plan or start a trial to continue.';
       return;
     }
     w.step += 1;
@@ -1196,6 +1212,7 @@
       await withBusy(btn, () => api('/members', { method: 'POST', body: {
         name: w.data.name, phone: w.data.phone, email: w.data.email || null,
         emergencyName: w.data.emergencyName || null, planId: w.data.planId, accessMethod: w.data.accessMethod,
+        isTrial: w.data.isTrial,
       } }));
       w.step = 4;
       renderWizard();

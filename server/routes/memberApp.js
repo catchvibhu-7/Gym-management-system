@@ -29,7 +29,7 @@ router.get('/me', (req, res) => {
 
   res.json({
     id: m.id, name: m.name, initials: initialsOf(m.name), status: m.status,
-    plan: membership ? membership.plan_name : (m.status === 'trial' ? 'Trial week' : '—'),
+    plan: membership ? membership.plan_name : (m.status === 'trial' ? 'Trial' : '—'),
     nextCharge: membership ? `${membership.next_charge_date} · ${money(membership.monthly_price_cents)}` : null,
     doorCode: m.qr_code,
     visitsThisMonth,
