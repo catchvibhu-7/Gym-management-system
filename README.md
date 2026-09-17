@@ -20,15 +20,21 @@ npm run dev:server # plain server only, auto-restarts on file changes
 ```
 
 The server seeds demo data on first boot (idempotent — skips if data already
-exists). It prints the owner login to the console:
+exists). It prints a precreated **admin** login to the console:
 
 ```
-Owner login: owner@forgeroom.gym / ForgeOwner123!
+Admin login (system access only, no member/billing data): admin@forgeroom.gym / ForgeAdmin123!
 ```
 
-Override with `OWNER_EMAIL` / `OWNER_PASSWORD` env vars, and `PORT`
-(default `3300` — if that port is busy, the server automatically tries the
-next one up and prints whichever it actually bound).
+That admin account can't see members, billing, or any other gym data — it
+exists only to run backups/restore. Opening the console on a fresh install
+shows a **setup wizard** instead of a login screen, since no owner account
+exists yet; fill it in once to create your real owner account (full access),
+after which the wizard never appears again for that database. Override the
+precreated admin's credentials with `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars
+(the old `OWNER_EMAIL` / `OWNER_PASSWORD` names still work as a fallback),
+and `PORT` (default `3300` — if that port is busy, the server automatically
+tries the next one up and prints whichever it actually bound).
 
 - Owner/staff console: `http://localhost:3300/console/` — includes a
   **Settings** nav group (owner/manager only) for gym name, currency, GST,
