@@ -178,33 +178,37 @@
     return g ? g.group : null;
   }
 
-  // A group with only one item has nothing to "unlock" - it's rendered as a
-  // single direct link. A multi-item group starts collapsed; hovering or
-  // clicking its label reveals its sub-tabs, and the group holding the
-  // current page is always expanded so the active tab stays visible.
-  let expandedNavGroup = null;
+  // Sidebar: one static card per section, always visible, never expanding
+  // or collapsing - clicking a card goes to that section's first available
+  // page. Sub-pages within the active section (if it has more than one)
+  // show as a plain tab strip at the top of the page instead - see
+  // renderSubTabs(). Nothing here ever changes on hover.
   function renderNav() {
     const allowed = allowedFor(state.staff.role);
-    if (!expandedNavGroup) expandedNavGroup = groupOf(state.route);
+    const activeGroup = groupOf(state.route);
     const root = document.getElementById('nav-root');
     root.innerHTML = '';
     orderedNavGroups().forEach((g) => {
       const items = g.items.filter((it) => allowed.includes(it.id));
       if (!items.length) return;
-      if (items.length === 1) {
-        const it = items[0];
-        const wrap = el(`<div class="nav-group expanded"><button class="nav-btn nav-group-solo${it.id === state.route ? ' active' : ''}" data-nav="${it.id}">${esc(g.group)}</button></div>`);
-        root.appendChild(wrap);
-        return;
-      }
-      const isExpanded = g.group === expandedNavGroup;
-      const wrap = el(`<div class="nav-group${isExpanded ? ' expanded' : ''}"><div class="nav-group-label" data-group="${esc(g.group)}">${esc(g.group)}</div></div>`);
-      items.forEach((it) => {
-        const btn = el(`<button class="nav-btn${it.id === state.route ? ' active' : ''}" data-nav="${it.id}">${esc(it.label)}</button>`);
-        wrap.appendChild(btn);
-      });
-      root.appendChild(wrap);
+      const isActive = g.group === activeGroup;
+      const btn = el(`<button class="nav-btn${isActive ? ' active' : ''}" data-nav="${items[0].id}">${esc(g.group)}</button>`);
+      root.appendChild(btn);
     });
+  }
+
+  function renderSubTabs() {
+    const root = document.getElementById('sub-tabs-root');
+    const allowed = allowedFor(state.staff.role);
+    const group = NAV.find((g) => g.group === groupOf(state.route));
+    const items = group ? group.items.filter((it) => allowed.includes(it.id)) : [];
+    if (items.length < 2) {
+      root.classList.add('hidden');
+      root.innerHTML = '';
+      return;
+    }
+    root.classList.remove('hidden');
+    root.innerHTML = items.map((it) => `<button class="sub-tab${it.id === state.route ? ' active' : ''}" data-nav="${it.id}">${esc(it.label)}</button>`).join('');
   }
 
   function defaultRouteFor(role) {
@@ -215,12 +219,9 @@
   function go(route) {
     if (!allowedFor(state.staff.role).includes(route)) route = defaultRouteFor(state.staff.role);
     state.route = route;
-    // Keep the destination's group expanded going forward, whether it was
-    // reached by clicking the group label or just hovering to reveal a
-    // sub-tab and clicking that directly - both should "stick" the same way.
-    expandedNavGroup = groupOf(route) || expandedNavGroup;
     location.hash = route;
     renderNav();
+    renderSubTabs();
     document.getElementById('page-title').textContent = NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label || 'Today';
     document.getElementById('page-subtitle').textContent = PAGE_META[route] || '';
     renderPage(route);
@@ -337,20 +338,10 @@
   });
 
   document.getElementById('nav-root').addEventListener('click', (e) => {
-    const groupLabel = e.target.closest('[data-group]');
-    if (groupLabel) {
-      const g = NAV.find((x) => x.group === groupLabel.dataset.group);
-      const items = g.items.filter((it) => allowedFor(state.staff.role).includes(it.id));
-      const hasActive = items.some((it) => it.id === state.route);
-      if (expandedNavGroup === g.group) {
-        expandedNavGroup = null;
-      } else {
-        expandedNavGroup = g.group;
-        if (!hasActive) { go(items[0].id); return; }
-      }
-      renderNav();
-      return;
-    }
+    const btn = e.target.closest('[data-nav]');
+    if (btn) go(btn.dataset.nav);
+  });
+  document.getElementById('sub-tabs-root').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-nav]');
     if (btn) go(btn.dataset.nav);
   });
@@ -358,6 +349,15 @@
   document.getElementById('open-kiosk-btn').addEventListener('click', openKiosk);
 
   document.getElementById('brand-home-btn').addEventListener('click', () => go(defaultRouteFor(state.staff.role)));
+
+  // Keeps the browser's back/forward buttons working: go() pushes a hash
+  // entry on every navigation, but without this the URL bar would change on
+  // back/forward while the visible page stayed frozen on the old route.
+  window.addEventListener('hashchange', () => {
+    if (!state.staff) return;
+    const route = location.hash.replace('#', '') || defaultRouteFor(state.staff.role);
+    if (route !== state.route) go(route);
+  });
 
   // ---------- Page router ----------
   const pageRoot = document.getElementById('page-root');
@@ -418,7 +418,7 @@
           <div class="avatar">${esc(t.initials)}</div>
           <div style="min-width:0;flex:1"><div style="font-size:13.5px;font-weight:600">${esc(t.name)}</div><div style="font-size:12px;color:var(--muted)">${esc(t.detail)}</div></div>
           <span style="${esc(t.tagStyle)};font-size:11.5px;font-weight:600">${esc(t.tag)}</span>
-          <button class="btn-outline btn-sm" data-action="task-jump" data-member="${t.memberId}">${esc(t.action)}</button>
+          <button class="btn-outline btn-sm" data-action="task-jump" data-member="${t.memberId}" data-invoice="${t.invoiceId || ''}">${esc(t.action)}</button>
         </div>`).join('') : '<div class="empty-state">Nothing needs attention right now.</div>'}
     </section>`);
     const feedCard = el(`<section class="card">
@@ -2423,7 +2423,11 @@
     else if (action === 'open-kiosk-from-page') openKiosk();
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();
-    else if (action === 'task-jump') { closeModalIfAny(); go('members'); }
+    else if (action === 'task-jump') {
+      closeModalIfAny();
+      if (a.dataset.invoice) settleInvoice(Number(a.dataset.invoice), a);
+      else go('members');
+    }
     else if (action === 'freeze-member') freezeMember(Number(a.dataset.member), a);
     else if (action === 'unfreeze-member') unfreezeMember(Number(a.dataset.member), a);
     else if (action === 'send-reminder') sendReminder(Number(a.dataset.member), a);
@@ -2526,7 +2530,7 @@
           }
           // The razorpay path already marked this invoice paid via /verify.
           toast('Invoice settled.', 'success');
-          renderPage('billing');
+          renderPage(state.route);
         },
       });
     } catch (err) { toast(err.message, 'error'); }

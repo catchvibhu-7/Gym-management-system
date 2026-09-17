@@ -55,9 +55,9 @@ router.get('/today', (req, res) => {
 
   const tasks = [
     ...failedInvoices.map((i) => ({
-      memberId: i.member_id, initials: initialsOf(i.name), name: i.name,
+      memberId: i.member_id, invoiceId: i.id, initials: initialsOf(i.name), name: i.name,
       detail: `Payment failed · ${money(i.amount_cents)}`, tag: 'Past due',
-      tagStyle: 'color:#b45309', action: 'Retry',
+      tagStyle: 'color:#b45309', action: 'Settle',
     })),
     ...trialsEnding.map((t) => ({
       memberId: t.id, initials: initialsOf(t.name), name: t.name,

@@ -64,31 +64,33 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
 .brand-name { font-family: 'Archivo Black', sans-serif; font-size: 13px; letter-spacing: -0.2px; line-height: 1.1; }
 .brand-sub { font-size: 10px; color: var(--muted-2); letter-spacing: 0.06em; text-transform: uppercase; }
 
-.nav-group { display: flex; flex-direction: column; gap: 6px; }
-.nav-group-label { font-size: 10px; color: var(--muted-2); letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 10px 4px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
-.nav-group-label::after { content: '›'; font-size: 11px; transition: transform 0.12s ease; }
-.nav-group.expanded .nav-group-label::after { transform: rotate(90deg); }
-.nav-group:not(.expanded) .nav-btn:not(.nav-group-solo) { display: none; }
-.nav-group:hover .nav-btn:not(.nav-group-solo) { display: flex; }
+/* Sidebar: a flat, static list of section cards - nothing here ever
+   expands, collapses, or changes on hover. Each card is a real nav link
+   to that section's default page; sub-pages within a section live in the
+   tab strip at the top of the page instead (see .sub-tabs below). This
+   replaces an earlier hover/click-to-expand accordion that caused the
+   whole sidebar to jump around as the mouse moved over it. */
+#nav-root { display: flex; flex-direction: column; gap: 8px; }
 .nav-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  border: none; background: transparent; color: var(--bg); border-radius: 8px;
-  padding: 9px 10px; font-size: 13px; font-weight: 500;
+  border: 1px solid #2c3028; background: var(--dark-2); color: var(--bg); border-radius: 10px;
+  padding: 13px 14px; font-size: 14px; font-weight: 500;
 }
-/* Sub-tabs render as distinct cards (bigger target, own background) rather
-   than plain flush list rows - the solo single-item buttons (e.g. Overview)
-   keep the plain flat style since they act as top-level links, not a
-   revealed sub-tab list. */
-.nav-btn:not(.nav-group-solo) {
-  padding: 13px 14px; font-size: 14px; border-radius: 10px;
-  background: var(--dark-2); border: 1px solid #2c3028;
-}
-.nav-btn:hover { background: var(--dark-2); }
-.nav-btn:not(.nav-group-solo):hover { background: #2c3028; }
-.nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
-.nav-btn:not(.nav-group-solo).active { border-color: var(--accent); }
+.nav-btn:hover { background: #2c3028; }
+.nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; border-color: var(--accent); }
 .nav-badge { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 10px; background: rgba(255,255,255,.16); border-radius: 999px; padding: 2px 7px; }
 .nav-btn.active .nav-badge { background: rgba(255,255,255,.25); }
+
+/* Sub-tabs: only appears when the current section has more than one page.
+   A plain, always-in-place tab row - switching sections shows/hides the
+   whole row once (on navigation), it never reveals or hides on hover. */
+.sub-tabs { display: flex; gap: 6px; padding: 0 28px; border-bottom: 1px solid var(--border); background: #fff; }
+.sub-tab {
+  border: none; background: none; padding: 12px 4px; margin-bottom: -1px;
+  font-size: 13px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer;
+}
+.sub-tab:hover { color: var(--text); }
+.sub-tab.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
 
 .sidebar-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
 .kiosk-btn {
@@ -260,15 +262,19 @@ table.data-table th.sortable.active .sort-arrow { opacity: 1; color: var(--accen
   #app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 12px 14px; gap: 12px; }
   .sidebar .brand { padding: 0; }
-  .sidebar nav#nav-root { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px; flex: 1; }
-  .nav-group { flex-direction: row; align-items: center; gap: 2px; }
-  .nav-group-label { display: none; }
+  .sidebar nav#nav-root { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; flex: 1; }
+  .nav-btn { padding: 8px 12px; font-size: 12.5px; }
+  .sub-tabs { padding: 0 14px; overflow-x: auto; }
   .sidebar-bottom { margin-top: 0; flex-direction: row; align-items: center; }
   .kiosk-btn { width: auto; padding: 8px 12px; }
   .kiosk-btn small { display: none; }
   .who-am-i { border-top: none; }
-  .grid-2, .grid-3 { grid-template-columns: 1fr; }
-  .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  /* !important: several call sites set an inline grid-template-columns
+     (e.g. "1.35fr 1fr", "minmax(0,1fr) 320px") for their desktop layout,
+     which otherwise beats this class rule on specificity and leaves two
+     columns squeezed side by side on narrow screens. */
+  .grid-2, .grid-3 { grid-template-columns: 1fr !important; }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
   table.data-table { display: block; overflow-x: auto; white-space: nowrap; }
 }
 @media (max-width: 600px) {
