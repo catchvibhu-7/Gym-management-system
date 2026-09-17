@@ -107,6 +107,13 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
 .logout-btn { margin-left: auto; border: none; background: transparent; color: var(--muted-2); font-size: 11px; }
 .logout-btn:hover { color: #fff; }
 
+/* Mobile top bar + hamburger/close toggle: hidden entirely on desktop,
+   where the sidebar is already always visible (see the 980px breakpoint
+   below for the mobile-only rules that show these and turn .sidebar into
+   a full-screen dropdown menu, Apple.com-style). */
+.mobile-topbar, .menu-toggle { display: none; }
+body.mobile-menu-open { overflow: hidden; }
+
 /* Main */
 main { padding: 0 0 60px; min-width: 0; }
 .topbar {
@@ -260,14 +267,50 @@ table.data-table th.sortable.active .sort-arrow { opacity: 1; color: var(--accen
 }
 @media (max-width: 980px) {
   #app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 12px 14px; gap: 12px; }
-  .sidebar .brand { padding: 0; }
-  .sidebar nav#nav-root { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; flex: 1; }
-  .nav-btn { padding: 8px 12px; font-size: 12.5px; }
+
+  /* Persistent slim top bar (brand + hamburger), always visible - the
+     Apple.com pattern of a thin fixed nav bar whose menu button opens a
+     full-screen dropdown, rather than the old approach of squeezing every
+     section button into a wrapped row up top. */
+  .mobile-topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--dark); color: var(--bg);
+    padding: 10px 16px; position: sticky; top: 0; z-index: 60;
+  }
+  .mobile-brand { display: flex; align-items: center; gap: 8px; border: none; background: none; color: inherit; padding: 0; cursor: pointer; }
+  .mobile-brand span { font-family: 'Archivo Black', sans-serif; font-size: 13px; letter-spacing: -0.2px; }
+
+  .menu-toggle {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    width: 36px; height: 36px; border: none; background: none; cursor: pointer;
+  }
+  .menu-toggle span { display: block; width: 20px; height: 2px; background: var(--bg); border-radius: 2px; transition: transform .2s ease, opacity .2s ease; }
+  .menu-toggle.active span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+  .menu-toggle.active span:nth-child(2) { opacity: 0; }
+  .menu-toggle.active span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+  /* The sidebar becomes a full-screen dropdown menu anchored below the
+     persistent top bar - closed by default, slid/faded in only while
+     #menu-toggle-btn is active. Its own .brand row is hidden since the
+     top bar's compact brand button already covers that (and stays put
+     as the close affordance while the menu is open). */
+  .sidebar {
+    position: fixed; left: 0; right: 0; top: 57px; bottom: 0; height: auto; z-index: 55;
+    flex-direction: column; align-items: stretch; padding: 18px 16px; gap: 18px;
+    transform: translateY(-8px); opacity: 0; visibility: hidden; pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease, visibility 0s linear .18s;
+  }
+  .sidebar.mobile-open {
+    transform: translateY(0); opacity: 1; visibility: visible; pointer-events: auto;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .sidebar .brand { display: none; }
+  .sidebar nav#nav-root { display: flex; flex-direction: column; gap: 10px; }
+  .nav-btn { padding: 16px; font-size: 17px; }
   .sub-tabs { padding: 0 14px; overflow-x: auto; }
-  .sidebar-bottom { margin-top: 0; flex-direction: row; align-items: center; }
-  .kiosk-btn { width: auto; padding: 8px 12px; }
-  .kiosk-btn small { display: none; }
+  .sidebar-bottom { margin-top: auto; padding-top: 16px; border-top: 1px solid #2a2e27; flex-direction: column; align-items: stretch; gap: 10px; }
+  .kiosk-btn { width: 100%; padding: 13px; }
+  .kiosk-btn small { display: block; }
   .who-am-i { border-top: none; }
   /* !important: several call sites set an inline grid-template-columns
      (e.g. "1.35fr 1fr", "minmax(0,1fr) 320px") for their desktop layout,

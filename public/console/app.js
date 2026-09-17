@@ -220,6 +220,7 @@
     if (!allowedFor(state.staff.role).includes(route)) route = defaultRouteFor(state.staff.role);
     state.route = route;
     location.hash = route;
+    closeMobileMenu();
     renderNav();
     renderSubTabs();
     document.getElementById('page-title').textContent = NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label || 'Today';
@@ -291,6 +292,7 @@
       settingsCache = settings;
       document.getElementById('brand-name-label').textContent = settings.gym_name.toUpperCase();
       document.getElementById('brand-sub-label').textContent = settings.gym_tagline;
+      document.getElementById('mobile-brand-name').textContent = settings.gym_name.toUpperCase();
       document.title = `${settings.gym_name} — Owner Console`;
       // The sidebar's first render (from showApp(), before this fetch
       // resolves) can't know nav_order yet - re-render once it's in.
@@ -346,9 +348,30 @@
     if (btn) go(btn.dataset.nav);
   });
 
-  document.getElementById('open-kiosk-btn').addEventListener('click', openKiosk);
+  document.getElementById('open-kiosk-btn').addEventListener('click', () => { closeMobileMenu(); openKiosk(); });
 
   document.getElementById('brand-home-btn').addEventListener('click', () => go(defaultRouteFor(state.staff.role)));
+
+  // ---------- Mobile menu (Apple.com-style: thin fixed top bar, hamburger
+  // opens a full-screen dropdown anchored right below it) ----------
+  function openMobileMenu() {
+    document.getElementById('sidebar').classList.add('mobile-open');
+    document.getElementById('menu-toggle-btn').classList.add('active');
+    document.getElementById('menu-toggle-btn').setAttribute('aria-expanded', 'true');
+    document.body.classList.add('mobile-menu-open');
+  }
+  function closeMobileMenu() {
+    document.getElementById('sidebar').classList.remove('mobile-open');
+    document.getElementById('menu-toggle-btn').classList.remove('active');
+    document.getElementById('menu-toggle-btn').setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('mobile-menu-open');
+  }
+  document.getElementById('menu-toggle-btn').addEventListener('click', () => {
+    const isOpen = document.getElementById('sidebar').classList.contains('mobile-open');
+    if (isOpen) closeMobileMenu(); else openMobileMenu();
+  });
+  document.getElementById('mobile-brand-btn').addEventListener('click', () => go(defaultRouteFor(state.staff.role)));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMobileMenu(); });
 
   // Keeps the browser's back/forward buttons working: go() pushes a hash
   // entry on every navigation, but without this the URL bar would change on
