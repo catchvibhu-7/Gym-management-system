@@ -7,9 +7,14 @@ dependency required.
 
 ## Run it
 
+Requires **Node 22.5+** (uses Node's built-in `node:sqlite` — no native
+module to compile, so `npm install` has nothing to build; a plain
+`npm install` works even on a bare Windows machine with no Python/C++
+toolchain installed).
+
 ```
 npm install
-npm start
+npm start          # or: npm run dev   (auto-restarts on file changes)
 ```
 
 The server seeds demo data on first boot (idempotent — skips if data already
@@ -33,7 +38,12 @@ Override with `OWNER_EMAIL` / `OWNER_PASSWORD` env vars, and `PORT` (default
 ## Architecture
 
 - `server/` — Express app, one file per concern. `db.js` opens the SQLite
-  file (`data/gym.db`, WAL mode) and runs `schema.sql` on boot.
+  file (`data/gym.db`, WAL mode) via Node's built-in `node:sqlite`
+  (`DatabaseSync`) and runs `schema.sql` on boot. It's marked experimental
+  by Node and prints a one-line warning on boot — harmless, and the
+  deliberate tradeoff for zero native-build friction; swap to
+  `better-sqlite3` later if you need something more battle-tested and don't
+  mind the native-compile step it brings back.
   `storage.js` is a tiny local "bucket" (put/get/delete by key under
   `data/uploads/`) with the same shape a real S3/MinIO client would expose —
   swapping in real object storage later only touches this one file.

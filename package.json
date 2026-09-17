@@ -5,13 +5,15 @@
   "description": "Local-first gym management system: SQLite backend, owner console, attendance kiosk, and member app.",
   "type": "commonjs",
   "main": "server/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node server/index.js",
     "dev": "nodemon --watch server --ext js,sql server/index.js",
     "seed": "node server/seed.js"
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0",
     "cookie-parser": "^1.4.7",
     "express": "^4.19.2"
   },
