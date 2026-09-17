@@ -60,7 +60,11 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
 .brand-sub { font-size: 10px; color: var(--muted-2); letter-spacing: 0.06em; text-transform: uppercase; }
 
 .nav-group { display: flex; flex-direction: column; gap: 2px; }
-.nav-group-label { font-size: 10px; color: var(--muted-2); letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 10px 4px; }
+.nav-group-label { font-size: 10px; color: var(--muted-2); letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 10px 4px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
+.nav-group-label::after { content: '›'; font-size: 11px; transition: transform 0.12s ease; }
+.nav-group.expanded .nav-group-label::after { transform: rotate(90deg); }
+.nav-group:not(.expanded) .nav-btn:not(.nav-group-solo) { display: none; }
+.nav-group:hover .nav-btn:not(.nav-group-solo) { display: flex; }
 .nav-btn {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
   border: none; background: transparent; color: var(--bg); border-radius: 8px;

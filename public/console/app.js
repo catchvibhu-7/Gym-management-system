@@ -150,14 +150,45 @@
     return out;
   }
 
+  // Groups render in the sidebar in this order by default - Settings >
+  // "Sidebar tab order" lets an owner/manager override it, stored as a
+  // pipe-separated list of group names in the nav_order setting. Unknown or
+  // missing names just fall back to their original position.
+  function orderedNavGroups() {
+    const stored = (settingsCache && settingsCache.nav_order || '').split('|').filter(Boolean);
+    if (!stored.length) return NAV;
+    const byName = new Map(NAV.map((g) => [g.group, g]));
+    const ordered = stored.map((name) => byName.get(name)).filter(Boolean);
+    NAV.forEach((g) => { if (!ordered.includes(g)) ordered.push(g); });
+    return ordered;
+  }
+
+  function groupOf(routeId) {
+    const g = NAV.find((g) => g.items.some((it) => it.id === routeId));
+    return g ? g.group : null;
+  }
+
+  // A group with only one item has nothing to "unlock" - it's rendered as a
+  // single direct link. A multi-item group starts collapsed; hovering or
+  // clicking its label reveals its sub-tabs, and the group holding the
+  // current page is always expanded so the active tab stays visible.
+  let expandedNavGroup = null;
   function renderNav() {
     const allowed = allowedFor(state.staff.role);
+    if (!expandedNavGroup) expandedNavGroup = groupOf(state.route);
     const root = document.getElementById('nav-root');
     root.innerHTML = '';
-    NAV.forEach((g) => {
+    orderedNavGroups().forEach((g) => {
       const items = g.items.filter((it) => allowed.includes(it.id));
       if (!items.length) return;
-      const wrap = el(`<div class="nav-group"><div class="nav-group-label">${esc(g.group)}</div></div>`);
+      if (items.length === 1) {
+        const it = items[0];
+        const wrap = el(`<div class="nav-group expanded"><button class="nav-btn nav-group-solo${it.id === state.route ? ' active' : ''}" data-nav="${it.id}">${esc(g.group)}</button></div>`);
+        root.appendChild(wrap);
+        return;
+      }
+      const isExpanded = g.group === expandedNavGroup;
+      const wrap = el(`<div class="nav-group${isExpanded ? ' expanded' : ''}"><div class="nav-group-label" data-group="${esc(g.group)}">${esc(g.group)}</div></div>`);
       items.forEach((it) => {
         const btn = el(`<button class="nav-btn${it.id === state.route ? ' active' : ''}" data-nav="${it.id}">${esc(it.label)}</button>`);
         wrap.appendChild(btn);
@@ -220,6 +251,9 @@
       document.getElementById('brand-name-label').textContent = settings.gym_name.toUpperCase();
       document.getElementById('brand-sub-label').textContent = settings.gym_tagline;
       document.title = `${settings.gym_name} — Owner Console`;
+      // The sidebar's first render (from showApp(), before this fetch
+      // resolves) can't know nav_order yet - re-render once it's in.
+      renderNav();
     } catch (e) { /* keep the default branding if settings can't load yet */ }
   }
 
@@ -246,6 +280,20 @@
   });
 
   document.getElementById('nav-root').addEventListener('click', (e) => {
+    const groupLabel = e.target.closest('[data-group]');
+    if (groupLabel) {
+      const g = NAV.find((x) => x.group === groupLabel.dataset.group);
+      const items = g.items.filter((it) => allowedFor(state.staff.role).includes(it.id));
+      const hasActive = items.some((it) => it.id === state.route);
+      if (expandedNavGroup === g.group) {
+        expandedNavGroup = null;
+      } else {
+        expandedNavGroup = g.group;
+        if (!hasActive) { go(items[0].id); return; }
+      }
+      renderNav();
+      return;
+    }
     const btn = e.target.closest('[data-nav]');
     if (btn) go(btn.dataset.nav);
   });
@@ -828,6 +876,12 @@
       <button class="btn btn-primary" data-action="save-fee-settings" style="margin-top:14px">Save</button>
     </section>`));
     pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Sidebar tab order</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">Reorder the groups in the left sidebar. Changes apply immediately.</p>
+      <div id="nav-order-list" style="display:flex;flex-direction:column;gap:6px"></div>
+    </section>`));
+    renderNavOrderRows(navOrderNames(settings));
+    pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:14px">Your password</h2>
       <div class="grid-2" style="margin-bottom:14px">
         <label class="field">Current password<input id="pw-current" type="password"></label>
@@ -864,6 +918,41 @@
     } catch (err) {
       errBox.textContent = err.message; errBox.classList.remove('hidden');
     }
+  }
+
+  function navOrderNames(settings) {
+    const stored = (settings.nav_order || '').split('|').filter(Boolean);
+    const names = NAV.map((g) => g.group);
+    const ordered = stored.filter((n) => names.includes(n));
+    names.forEach((n) => { if (!ordered.includes(n)) ordered.push(n); });
+    return ordered;
+  }
+
+  function renderNavOrderRows(order) {
+    const list = document.getElementById('nav-order-list');
+    if (!list) return;
+    list.innerHTML = order.map((name, i) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border-soft);border-radius:8px">
+        <span style="flex:1;font-size:13px;font-weight:600">${esc(name)}</span>
+        <button class="btn-quiet" data-nav-order-up="${i}" ${i === 0 ? 'disabled style="opacity:.3"' : ''}>↑</button>
+        <button class="btn-quiet" data-nav-order-down="${i}" ${i === order.length - 1 ? 'disabled style="opacity:.3"' : ''}>↓</button>
+      </div>`).join('');
+    list.querySelectorAll('[data-nav-order-up]').forEach((b) => b.addEventListener('click', () => moveNavOrder(order, Number(b.dataset.navOrderUp), -1)));
+    list.querySelectorAll('[data-nav-order-down]').forEach((b) => b.addEventListener('click', () => moveNavOrder(order, Number(b.dataset.navOrderDown), 1)));
+  }
+
+  async function moveNavOrder(order, index, dir) {
+    const next = [...order];
+    const swap = index + dir;
+    if (swap < 0 || swap >= next.length) return;
+    [next[index], next[swap]] = [next[swap], next[index]];
+    try {
+      await api('/settings', { method: 'PATCH', body: { nav_order: next.join('|') } });
+      settingsCache = { ...(settingsCache || {}), nav_order: next.join('|') };
+      renderNavOrderRows(next);
+      renderNav();
+      toast('Sidebar order updated.', 'success');
+    } catch (err) { toast(err.message, 'error'); }
   }
 
   async function saveFeeSettings() {
