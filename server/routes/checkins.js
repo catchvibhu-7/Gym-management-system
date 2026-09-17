@@ -61,6 +61,25 @@ router.get('/access-stats', requireStaff(), (req, res) => {
   }));
 });
 
+// Purely informational - flags a code that's been used unusually often
+// today so staff can watch for sharing, but takes no action on its own
+// (doesn't block the code or notify the member).
+router.get('/frequent-today', requireStaff(), (req, res) => {
+  const THRESHOLD = 3;
+  const rows = db.prepare(
+    `SELECT m.id, m.name, c.method, COUNT(*) c FROM checkins c
+     JOIN members m ON m.id = c.member_id
+     WHERE date(c.checked_in_at) = date('now') AND c.method IN ('qr','fob')
+     GROUP BY m.id, c.method
+     HAVING c >= ?
+     ORDER BY c DESC`
+  ).all(THRESHOLD);
+  res.json(rows.map((r) => ({
+    id: r.id, initials: initialsOf(r.name), name: r.name,
+    method: r.method === 'qr' ? 'QR' : 'Fob', count: r.c,
+  })));
+});
+
 router.get('/lapsed', requireStaff(), (req, res) => {
   const rows = db.prepare(
     `SELECT m.id, m.name, (SELECT MAX(checked_in_at) FROM checkins WHERE member_id = m.id) last_visit

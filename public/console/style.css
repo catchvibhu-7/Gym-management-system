@@ -54,12 +54,17 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
   padding: 20px 14px; display: flex; flex-direction: column; gap: 22px;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto;
 }
-.brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.brand {
+  display: flex; align-items: center; gap: 10px; padding: 6px;
+  border: none; background: none; text-align: left; width: 100%; cursor: pointer;
+  border-radius: 8px;
+}
+.brand:hover { background: var(--dark-2); }
 .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; font-family: 'Archivo Black', sans-serif; font-size: 14px; color: #fff; flex: none; }
 .brand-name { font-family: 'Archivo Black', sans-serif; font-size: 13px; letter-spacing: -0.2px; line-height: 1.1; }
 .brand-sub { font-size: 10px; color: var(--muted-2); letter-spacing: 0.06em; text-transform: uppercase; }
 
-.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group { display: flex; flex-direction: column; gap: 6px; }
 .nav-group-label { font-size: 10px; color: var(--muted-2); letter-spacing: 0.08em; text-transform: uppercase; padding: 8px 10px 4px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 5px; }
 .nav-group-label::after { content: '›'; font-size: 11px; transition: transform 0.12s ease; }
 .nav-group.expanded .nav-group-label::after { transform: rotate(90deg); }
@@ -70,8 +75,18 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
   border: none; background: transparent; color: var(--bg); border-radius: 8px;
   padding: 9px 10px; font-size: 13px; font-weight: 500;
 }
+/* Sub-tabs render as distinct cards (bigger target, own background) rather
+   than plain flush list rows - the solo single-item buttons (e.g. Overview)
+   keep the plain flat style since they act as top-level links, not a
+   revealed sub-tab list. */
+.nav-btn:not(.nav-group-solo) {
+  padding: 13px 14px; font-size: 14px; border-radius: 10px;
+  background: var(--dark-2); border: 1px solid #2c3028;
+}
 .nav-btn:hover { background: var(--dark-2); }
+.nav-btn:not(.nav-group-solo):hover { background: #2c3028; }
 .nav-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-btn:not(.nav-group-solo).active { border-color: var(--accent); }
 .nav-badge { margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 10px; background: rgba(255,255,255,.16); border-radius: 999px; padding: 2px 7px; }
 .nav-btn.active .nav-badge { background: rgba(255,255,255,.25); }
 

@@ -41,7 +41,7 @@ const SORT_COLUMNS = {
 };
 
 router.get('/invoices', (req, res) => {
-  const { page, limit = 20, sortBy = 'date', sortDir = 'desc' } = req.query;
+  const { page, limit = 10, sortBy = 'date', sortDir = 'desc' } = req.query;
   const col = SORT_COLUMNS[sortBy] || SORT_COLUMNS.date;
   const dir = sortDir === 'asc' ? 'ASC' : 'DESC';
   const allRows = db.prepare(
@@ -54,7 +54,7 @@ router.get('/invoices', (req, res) => {
   ).all();
   const total = allRows.length;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
   const rows = page ? allRows.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim) : allRows.slice(0, 100);
   const items = rows.map((i) => ({
     id: i.id, name: i.member_name, plan: i.plan_name || '—',

@@ -24,7 +24,7 @@ const SORT_COLUMNS = {
 };
 
 router.get('/', (req, res) => {
-  const { q = '', status = 'all', page, limit = 20, sortBy = 'name', sortDir = 'asc' } = req.query;
+  const { q = '', status = 'all', page, limit = 10, sortBy = 'name', sortDir = 'asc' } = req.query;
   let sql = `SELECT m.*, mo.plan_id, p.name plan_name,
       (SELECT MAX(checked_in_at) FROM checkins WHERE member_id = m.id) last_visit
     FROM members m
@@ -42,7 +42,7 @@ router.get('/', (req, res) => {
   const allRows = db.prepare(sql).all(...params);
   const total = allRows.length;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+  const lim = Math.max(1, Math.min(100, parseInt(limit, 10) || 10));
   const rows = page ? allRows.slice((pageNum - 1) * lim, (pageNum - 1) * lim + lim) : allRows;
 
   const items = rows.map((m) => ({

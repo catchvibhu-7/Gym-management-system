@@ -2,8 +2,8 @@
 (() => {
   const state = {
     staff: null, route: 'today',
-    members: { q: '', status: 'all', selectedId: null, page: 1, limit: 20, sortBy: 'name', sortDir: 'asc' },
-    billing: { page: 1, limit: 20, sortBy: 'date', sortDir: 'desc' },
+    members: { q: '', status: 'all', selectedId: null, page: 1, limit: 10, sortBy: 'name', sortDir: 'asc' },
+    billing: { page: 1, limit: 10, sortBy: 'date', sortDir: 'desc' },
     wizard: null,
   };
 
@@ -210,6 +210,10 @@
   function go(route) {
     if (!allowedFor(state.staff.role).includes(route)) route = defaultRouteFor(state.staff.role);
     state.route = route;
+    // Keep the destination's group expanded going forward, whether it was
+    // reached by clicking the group label or just hovering to reveal a
+    // sub-tab and clicking that directly - both should "stick" the same way.
+    expandedNavGroup = groupOf(route) || expandedNavGroup;
     location.hash = route;
     renderNav();
     document.getElementById('page-title').textContent = NAV.flatMap((g) => g.items).find((i) => i.id === route)?.label || 'Today';
@@ -348,6 +352,8 @@
 
   document.getElementById('open-kiosk-btn').addEventListener('click', openKiosk);
 
+  document.getElementById('brand-home-btn').addEventListener('click', () => go(defaultRouteFor(state.staff.role)));
+
   // ---------- Page router ----------
   const pageRoot = document.getElementById('page-root');
   const topbarActions = document.getElementById('topbar-actions');
@@ -379,7 +385,7 @@
 
   // ---------- Today ----------
   async function pageToday() {
-    const d = await api('/dashboard/today');
+    const [d, frequent] = await Promise.all([api('/dashboard/today'), api('/checkins/frequent-today')]);
     setTopActions([
       insideNowPill(d.insideNow),
       el(`<button class="btn" data-action="open-day-pass">Sell day pass</button>`),
@@ -420,6 +426,23 @@
     </section>`);
     cols.append(tasksCard, feedCard);
     pageRoot.appendChild(cols);
+
+    if (frequent.length) {
+      // Informational only - just something for staff to notice and look
+      // into if it seems off, never an automatic block or notification.
+      pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--warn-bg);border-color:#f4d9b0">
+        <h2 style="font-size:14.5px;color:var(--warn-fg);margin-bottom:6px">Frequent check-ins today</h2>
+        <p style="margin:0 0 12px;font-size:12.5px;color:#8a5a1e;line-height:1.6">These codes were used more than usual today - not necessarily a problem, but worth a look in case a code is being shared.</p>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${frequent.map((f) => `<div class="row" style="padding:0">
+            <div class="avatar">${esc(f.initials)}</div>
+            <span style="font-size:13.5px;font-weight:600;flex:1">${esc(f.name)}</span>
+            <span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg)">${esc(f.method)}</span>
+            <span class="mono" style="font-size:12px;color:var(--muted)">${f.count} check-ins</span>
+          </div>`).join('')}
+        </div>
+      </section>`));
+    }
 
     if (d.todayClasses.length) {
       const classesCard = el(`<section class="card card-pad">
@@ -888,6 +911,12 @@
     }
   }
 
+  const CURRENCIES = [
+    ['USD', '$'], ['EUR', '€'], ['GBP', '£'], ['INR', '₹'], ['AUD', '$'], ['CAD', '$'],
+    ['JPY', '¥'], ['CNY', '¥'], ['AED', 'د.إ'], ['SGD', '$'], ['ZAR', 'R'], ['BRL', 'R$'],
+  ];
+  const CURRENCY_SYMBOLS = [...new Set(CURRENCIES.map(([, symbol]) => symbol))];
+
   // ---------- Settings: General & billing ----------
   async function pageSettingsGeneral() {
     const settings = await api('/settings');
@@ -902,8 +931,12 @@
     pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:14px">Currency &amp; tax</h2>
       <div class="grid-2" style="margin-bottom:14px">
-        <label class="field">Currency code<input id="set-currency-code" value="${esc(settings.currency_code)}" placeholder="USD"></label>
-        <label class="field">Currency symbol<input id="set-currency-symbol" value="${esc(settings.currency_symbol)}" placeholder="$"></label>
+        <label class="field">Currency code
+          <select id="set-currency-code">${CURRENCIES.map(([code]) => `<option value="${code}" ${settings.currency_code === code ? 'selected' : ''}>${code}</option>`).join('')}${CURRENCIES.some(([code]) => code === settings.currency_code) ? '' : `<option value="${esc(settings.currency_code)}" selected>${esc(settings.currency_code)}</option>`}</select>
+        </label>
+        <label class="field">Currency symbol
+          <select id="set-currency-symbol">${CURRENCY_SYMBOLS.map((s) => `<option value="${esc(s)}" ${settings.currency_symbol === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}${CURRENCY_SYMBOLS.includes(settings.currency_symbol) ? '' : `<option value="${esc(settings.currency_symbol)}" selected>${esc(settings.currency_symbol)}</option>`}</select>
+        </label>
       </div>
       <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;font-weight:600">
         <button class="toggle-track" id="set-gst-toggle" style="background:${settings.gst_enabled === '1' ? 'var(--accent)' : '#dcded7'}"><span class="toggle-knob" style="left:${settings.gst_enabled === '1' ? 18 : 2}px"></span></button>
@@ -951,6 +984,11 @@
       const on = btn.style.background !== 'var(--accent)';
       btn.style.background = on ? 'var(--accent)' : '#dcded7';
       btn.querySelector('.toggle-knob').style.left = on ? '18px' : '2px';
+    });
+
+    document.getElementById('set-currency-code').addEventListener('change', (e) => {
+      const match = CURRENCIES.find(([code]) => code === e.target.value);
+      if (match) document.getElementById('set-currency-symbol').value = match[1];
     });
   }
 
