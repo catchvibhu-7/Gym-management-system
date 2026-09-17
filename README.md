@@ -24,16 +24,26 @@ exists). It prints the owner login to the console:
 Owner login: owner@forgeroom.gym / ForgeOwner123!
 ```
 
-Override with `OWNER_EMAIL` / `OWNER_PASSWORD` env vars, and `PORT` (default
-`3300`).
+Override with `OWNER_EMAIL` / `OWNER_PASSWORD` env vars, and `PORT`
+(default `3300` — if that port is busy, the server automatically tries the
+next one up and prints whichever it actually bound).
 
-- Owner/staff console: `http://localhost:3300/console/`
+- Owner/staff console: `http://localhost:3300/console/` — includes a
+  **Settings** nav group (owner/manager only) for gym name, currency, GST,
+  payment/notification provider connections, and backups.
 - Member app: `http://localhost:3300/member/` — log in with any seeded
   member's phone number and a PIN of the last 4 digits (e.g. Priya Raghavan,
-  `+1 312 847 1928`, PIN `1928`).
+  `+1 312 847 1928`, PIN `1928`). On boot the server also prints a LAN
+  address (e.g. `http://192.168.1.23:3300/member/`) — that's the one to give
+  members on their own phones over the gym's wifi; `localhost` only works on
+  the machine actually running the server.
 - Door kiosk: click "Open door kiosk" inside the console (needs a staff
   login first — it's meant to run on a tablet at the door that's already
   signed in).
+
+See [`DATA-MODEL.md`](./DATA-MODEL.md) for how every table relates to every
+other one, and which fields are deliberately frozen snapshots vs. live
+references.
 
 ## Desktop app (Electron)
 
@@ -90,28 +100,49 @@ artwork whenever you have it.
 - `data/` — gitignored. SQLite DB + uploaded files live here. Delete it to
   reset to a fresh seeded state.
 
+## Settings (Settings nav group, owner/manager only)
+
+- **General & billing** — gym name/tagline (shown in the sidebar and page
+  title), currency code/symbol (applied everywhere `money()` formats an
+  amount, immediately), GST toggle + number + percentage (applied to new
+  membership/day-pass charges going forward — see `settingsStore.applyGst()`),
+  and your own password change.
+- **Payments** — connect Razorpay (key ID/secret, optional webhook
+  secret) to take real payments instead of the simulated dunning retry.
+  `server/payments/razorpay.js` is a real REST integration (order
+  creation, payment-signature verification, webhook-signature
+  verification) built against Razorpay's documented API shapes — it has
+  **not** been exercised against a live Razorpay account (none was
+  available while building this), so treat it as correct-by-reading until
+  someone with real keys verifies the full checkout round-trip. Without a
+  provider connected, billing retries stay simulated (succeed ~60% of the
+  time at random) so the dunning workflow is still fully usable.
+- **Notifications** — connect an SMS/email provider (Twilio, MSG91, or
+  plain SMTP) so the Reminders page's automations and "Send reminder"/
+  "Nudge" buttons actually send something. No provider ships connected;
+  until one is, those actions just record the intent.
+- **Backup** — a backup is taken automatically on every boot and once a
+  day while running (`server/backup.js`, rotates the last 20). Download
+  any backup, trigger one on demand, or restore from an uploaded `.db`
+  file. Restoring closes the live database connection (required on
+  Windows, where an open file can't be overwritten) and ends the process
+  right after — `npm run dev` and the Electron app both come back on
+  their own; a plain `npm start` needs restarting by hand. The current
+  database is always safety-copied before a restore overwrites it.
+
 ## Deliberately simple / not wired up
 
 These are placeholders by design, not bugs — each is a vendor/infra
 decision that wasn't made yet:
 
-- **No real SMS/email provider.** The Reminders page's automation toggles
-  are real and persisted, but nothing actually sends a text — "Send
-  reminder"/"Nudge" buttons just record the intent. Wire a provider
-  (Twilio, etc.) into `server/routes/members.js`'s `/reminder` route and
-  the automations trigger logic when one is chosen.
-- **No real card processor.** Invoices and retries are simulated
-  (`server/routes/billing.js` — a retry succeeds ~60% of the time at
-  random) so the dunning workflow is fully testable end to end. Swap in a
-  real processor's webhook the same way the invoice `status` field already
-  models it (`pending`/`paid`/`failed`).
 - **Local object storage, not real S3.** `server/storage.js` stores files
   on local disk with an S3-shaped interface. Point it at MinIO or AWS S3
   later without touching any route code.
 - **"Plan moves"** (upgrade/downgrade tracking) shows recent joins and
   cancellations as a stand-in — there's no plan-change history table yet.
-- **Class creation** is limited to adding new dated sessions for classes
-  already seeded; there's no "create a new recurring class" UI yet.
+- **No recurring-billing scheduler.** Nothing automatically advances a
+  membership to its next cycle or generates the next invoice — every
+  invoice today comes from signup or a manual retry. See `DATA-MODEL.md`.
 - **Kiosk hardware**: there's no real QR scanner/fob reader integration.
   The kiosk page accepts a code typed or scanned into a text input (works
   with any USB barcode-scanner-as-keyboard hardware) and also has a

@@ -57,6 +57,31 @@
     });
   }
 
+  // ---------- Prompt dialog (replaces window.prompt) ----------
+  function promptDialog({ title = 'Enter a value', label = '', placeholder = '', inputType = 'text', confirmLabel = 'OK' } = {}) {
+    return new Promise((resolve) => {
+      const root = document.getElementById('modal-root');
+      root.innerHTML = '';
+      const overlay = el(`<div class="modal-overlay" id="prompt-overlay"><div class="modal modal-sm">
+        <div class="modal-header"><h2>${esc(title)}</h2></div>
+        <div class="modal-body">
+          <label class="field">${esc(label)}<input id="prompt-input" type="${esc(inputType)}" placeholder="${esc(placeholder)}"></label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" data-role="cancel">Cancel</button>
+          <button class="btn btn-primary" style="margin-left:auto" data-role="confirm">${esc(confirmLabel)}</button>
+        </div>
+      </div></div>`);
+      root.appendChild(overlay);
+      const input = overlay.querySelector('#prompt-input');
+      const finish = (result) => { overlay.remove(); resolve(result); };
+      overlay.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
+      overlay.querySelector('[data-role="confirm"]').addEventListener('click', () => finish(input.value));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+      input.focus();
+    });
+  }
+
   // ---------- Button busy state ----------
   async function withBusy(btn, fn) {
     if (!btn) return fn();
@@ -99,12 +124,20 @@
       { id: 'reports', label: 'Reports', roles: ['owner', 'manager'] },
       { id: 'reminders', label: 'Reminders', roles: ['owner', 'manager'] },
     ] },
+    { group: 'Settings', items: [
+      { id: 'settings-general', label: 'General & billing', roles: ['owner', 'manager'] },
+      { id: 'settings-payments', label: 'Payments', roles: ['owner', 'manager'] },
+      { id: 'settings-notifications', label: 'Notifications', roles: ['owner', 'manager'] },
+      { id: 'settings-backup', label: 'Backup', roles: ['owner', 'manager'] },
+    ] },
   ];
   const PAGE_META = {
     today: 'Desk view', members: 'Roster, plans and status', attendance: 'QR codes and fob reads at the turnstile',
     billing: 'Charges, failures and recovery', plans: 'Pricing, day passes and plan moves',
     classes: 'Schedule and waitlists', team: 'Coaches, desk staff and access levels',
     reports: 'Revenue, retention and capacity', reminders: 'Automatic texts and emails',
+    'settings-general': 'Gym profile, currency and GST', 'settings-payments': 'Card/UPI processor configuration',
+    'settings-notifications': 'SMS and email provider configuration', 'settings-backup': 'Download or restore your data',
   };
 
   function allowedFor(role) {
@@ -162,8 +195,18 @@
     document.getElementById('whoami-initials').textContent = initials(state.staff.name);
     document.getElementById('whoami-name').textContent = state.staff.name;
     document.getElementById('whoami-role').textContent = state.staff.role[0].toUpperCase() + state.staff.role.slice(1);
+    applyBranding();
     const startRoute = location.hash.replace('#', '') || 'today';
     go(startRoute);
+  }
+
+  async function applyBranding() {
+    try {
+      const settings = await api('/settings');
+      document.getElementById('brand-name-label').textContent = settings.gym_name.toUpperCase();
+      document.getElementById('brand-sub-label').textContent = settings.gym_tagline;
+      document.title = `${settings.gym_name} — Owner Console`;
+    } catch (e) { /* keep the default branding if settings can't load yet */ }
   }
 
   function initials(name) { return name.split(' ').filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase(); }
@@ -202,7 +245,12 @@
   function renderPage(route) {
     pageRoot.innerHTML = loadingBlock();
     topbarActions.innerHTML = '';
-    const fns = { today: pageToday, members: pageMembers, attendance: pageAttendance, billing: pageBilling, plans: pagePlans, classes: pageClasses, team: pageTeam, reports: pageReports, reminders: pageReminders };
+    const fns = {
+      today: pageToday, members: pageMembers, attendance: pageAttendance, billing: pageBilling, plans: pagePlans,
+      classes: pageClasses, team: pageTeam, reports: pageReports, reminders: pageReminders,
+      'settings-general': pageSettingsGeneral, 'settings-payments': pageSettingsPayments,
+      'settings-notifications': pageSettingsNotifications, 'settings-backup': pageSettingsBackup,
+    };
     (fns[route] || pageToday)().catch((err) => {
       pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
       toast(err.message, 'error');
@@ -349,6 +397,7 @@
     async function loadDetail(id) {
       state.members.selectedId = id;
       const m = await api(`/members/${id}`);
+      state.members.detailCache = m;
       const wp = await api(`/workout-plans/member/${id}`).catch(() => []);
       document.getElementById('member-detail').innerHTML = `
         <div style="padding:18px 20px;background:var(--dark);color:#fff">
@@ -379,6 +428,7 @@
             </div>`).join('') : `<div style="font-size:12px;color:var(--muted)">No plan yet.</div>`}
         </div>
         <div style="padding:0 16px 18px;display:grid;gap:8px">
+          <button class="btn btn-outline" data-action="edit-member">Edit details</button>
           <button class="btn btn-outline" data-action="send-reminder" data-member="${m.id}">Send reminder</button>
           ${m.status !== 'frozen' ? `<button class="btn btn-outline" data-action="freeze-member" data-member="${m.id}">Freeze membership</button>` : ''}
         </div>`;
@@ -519,18 +569,30 @@
 
   // ---------- Plans ----------
   async function pagePlans() {
-    setTopActions([el(`<button class="btn btn-primary" data-action="open-day-pass">Sell a pass</button>`)]);
-    const [plans, passTypes, passSummary, moves] = await Promise.all([
-      api('/plans'), api('/plans/day-pass-types'), api('/plans/day-passes/summary'), api('/plans/moves'),
+    const canManage = ['owner', 'manager'].includes(state.staff.role);
+    setTopActions([
+      ...(canManage ? [el(`<button class="btn" data-action="open-plan-modal">Add plan</button>`)] : []),
+      el(`<button class="btn btn-primary" data-action="open-day-pass">Sell a pass</button>`),
     ]);
+    const [plans, passTypes, passSummary, moves] = await Promise.all([
+      api(`/plans${canManage ? '?all=1' : ''}`), api('/plans/day-pass-types'), api('/plans/day-passes/summary'), api('/plans/moves'),
+    ]);
+    state.plansCache = plans;
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<div class="grid-3">${plans.map((p) => `
-      <div class="card card-pad">
-        ${p.tag ? `<span class="chip" style="background:var(--accent-soft);color:var(--accent-dark)">${esc(p.tag)}</span>` : ''}
+      <div class="card card-pad" style="${p.active ? '' : 'opacity:.55'}">
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          ${p.tag ? `<span class="chip" style="background:var(--accent-soft);color:var(--accent-dark)">${esc(p.tag)}</span>` : '<span></span>'}
+          ${!p.active ? '<span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg);margin-left:auto">Inactive</span>' : ''}
+        </div>
         <div style="font-family:'Archivo Black',sans-serif;font-size:20px;margin:12px 0 4px">${esc(p.name)}</div>
-        <div style="display:flex;align-items:baseline;gap:5px"><span style="font-family:'Archivo Black',sans-serif;font-size:30px">${esc(p.price)}</span><span style="font-size:12.5px;color:var(--muted)">/ month</span></div>
+        <div style="display:flex;align-items:baseline;gap:5px"><span style="font-family:'Archivo Black',sans-serif;font-size:30px">${esc(p.price)}</span><span style="font-size:12.5px;color:var(--muted)">/ ${esc(p.periodLabel)}</span></div>
         <p style="font-size:12.5px;color:var(--muted);margin:8px 0;line-height:1.5">${esc(p.desc || '')}</p>
         <div style="font-size:12px;color:var(--muted)">${p.members} members · ${esc(p.share)} of revenue</div>
+        ${canManage ? `<div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn-outline btn-sm" data-action="edit-plan" data-id="${p.id}">Edit</button>
+          <button class="btn-outline btn-sm" data-action="${p.active ? 'deactivate-plan' : 'reactivate-plan'}" data-id="${p.id}">${p.active ? 'Deactivate' : 'Reactivate'}</button>
+        </div>` : ''}
       </div>`).join('')}</div>`));
 
     const cols = el(`<div class="grid-2"></div>`);
@@ -559,8 +621,12 @@
 
   // ---------- Classes ----------
   async function pageClasses() {
-    const week = await api('/classes/week');
-    const waitlists = await api('/classes/waitlists');
+    const canManage = ['owner', 'manager'].includes(state.staff.role);
+    setTopActions(canManage ? [el(`<button class="btn btn-primary" data-action="open-class-modal">New class</button>`)] : []);
+    const [week, waitlists, classList] = await Promise.all([
+      api('/classes/week'), api('/classes/waitlists'), api(`/classes/list${canManage ? '?all=1' : ''}`),
+    ]);
+    state.classesCache = classList;
     pageRoot.innerHTML = '';
     const byDay = Array.from({ length: 6 }, () => []);
     week.sessions.forEach((s) => { if (byDay[s.dayIndex]) byDay[s.dayIndex].push(s); });
@@ -588,20 +654,50 @@
           <span class="mono" style="font-weight:700;color:var(--warn-fg)">${w.count} waiting</span>
         </div>`).join('') : '<div class="empty-state">No waitlists right now.</div>'}
     </section>`));
+
+    if (canManage) {
+      pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+        <div class="card-header"><h2>All classes</h2><span class="count">${classList.length}</span></div>
+        <table class="data-table"><thead><tr><th>Name</th><th>Day</th><th>Time</th><th>Coach</th><th>Capacity</th><th>Status</th><th></th></tr></thead>
+        <tbody>${classList.map((c) => `<tr style="${c.active ? '' : 'opacity:.55'}">
+            <td style="font-weight:600">${esc(c.name)}</td>
+            <td style="font-size:12.5px">${esc(c.dayLabel)}</td>
+            <td class="mono" style="font-size:12.5px">${esc(c.startTime)}</td>
+            <td style="font-size:12.5px">${esc(c.coach)}</td>
+            <td style="font-size:12.5px">${c.capacity}</td>
+            <td><span class="chip" style="${c.active ? 'background:var(--accent-soft);color:var(--accent-dark)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${c.active ? 'Active' : 'Suspended'}</span></td>
+            <td style="white-space:nowrap">
+              <button class="btn-outline btn-sm" data-action="new-class-session" data-id="${c.id}">Add session</button>
+              <button class="btn-outline btn-sm" data-action="edit-class" data-id="${c.id}">Edit</button>
+              <button class="btn-outline btn-sm" data-action="${c.active ? 'suspend-class' : 'resume-class'}" data-id="${c.id}">${c.active ? 'Suspend' : 'Resume'}</button>
+              <button class="btn-outline btn-sm" data-action="delete-class" data-id="${c.id}">Delete</button>
+            </td>
+          </tr>`).join('')}</tbody></table>
+      </section>`));
+    }
   }
 
   // ---------- Team ----------
   async function pageTeam() {
-    const [staff, onFloor] = await Promise.all([api('/team'), api('/team/on-floor')]);
+    setTopActions([el(`<button class="btn btn-primary" data-action="open-staff-modal">Add staff</button>`)]);
+    const [staff, onFloor] = await Promise.all([api('/team/admin'), api('/team/on-floor')]);
+    state.staffCache = staff;
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
       <div class="card-header"><h2>Coaches and desk staff</h2></div>
-      <table class="data-table"><thead><tr><th>Name</th><th>Access</th><th>Classes</th><th>Status</th></tr></thead>
-      <tbody>${staff.map((s) => `<tr>
+      <table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Access</th><th>Status</th><th></th></tr></thead>
+      <tbody>${staff.map((s) => `<tr style="${s.active ? '' : 'opacity:.55'}">
           <td><div style="display:flex;align-items:center;gap:10px"><div class="avatar">${esc(s.initials)}</div>
-            <div><div style="font-weight:600">${esc(s.name)}</div><div style="font-size:11.5px;color:var(--muted)">${esc(s.role)}</div></div></div></td>
-          <td style="font-size:12.5px">${esc(s.access)}</td><td style="font-size:12.5px">${esc(s.classes)}</td>
-          <td><span class="chip" style="${esc(s.chipStyle)}">${esc(s.status)}</span></td>
+            <div style="font-weight:600">${esc(s.name)}</div></div></td>
+          <td style="font-size:12.5px">${esc(s.email)}</td>
+          <td style="font-size:12.5px">${esc(s.roleLabel)}</td>
+          <td style="font-size:12.5px">${s.access === 'full' ? 'Full console' : 'Limited'}</td>
+          <td><span class="chip" style="${s.active ? 'background:var(--accent-soft);color:var(--accent-dark)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${s.active ? 'Active' : 'Deactivated'}</span></td>
+          <td style="white-space:nowrap">
+            <button class="btn-outline btn-sm" data-action="edit-staff" data-id="${s.id}">Edit</button>
+            <button class="btn-outline btn-sm" data-action="reset-staff-password" data-id="${s.id}">Reset PW</button>
+            ${s.id !== state.staff.id ? `<button class="btn-outline btn-sm" data-action="${s.active ? 'deactivate-staff' : 'reactivate-staff'}" data-id="${s.id}">${s.active ? 'Deactivate' : 'Reactivate'}</button>` : ''}
+          </td>
         </tr>`).join('')}</tbody></table></section>`));
     pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:4px">Who is on the floor right now</h2>
@@ -637,7 +733,8 @@
 
   // ---------- Reminders ----------
   async function pageReminders() {
-    const automations = await api('/automations');
+    const [automations, settings] = await Promise.all([api('/automations'), api('/settings')]);
+    const connected = settings.notification_provider !== 'none';
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
       <div class="card-header"><h2>Automatic messages</h2></div>
@@ -650,10 +747,262 @@
           <span class="chip" style="background:var(--neutral-bg);color:var(--neutral-fg)">${esc(a.channel)}</span>
         </div>`).join('')}
     </section>`));
-    pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-soft);border-color:var(--accent-soft-border)">
-      <h2 style="font-size:14.5px;color:#14342a">No SMS/email provider connected yet</h2>
-      <p style="margin:6px 0 0;font-size:12.5px;color:#245546;line-height:1.6">These toggles control whether an automation would fire — connect a provider in settings to actually send messages. Until then, "Send reminder"/"Nudge" buttons elsewhere just record the request.</p>
+    if (connected) {
+      pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-soft);border-color:var(--accent-soft-border)">
+        <h2 style="font-size:14.5px;color:#14342a">Connected: ${esc(settings.notification_provider)}</h2>
+        <p style="margin:6px 0 0;font-size:12.5px;color:#245546;line-height:1.6">These automations will fire through your connected provider. Manage the connection in Settings &gt; Notifications.</p>
+      </section>`));
+    } else {
+      pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-soft);border-color:var(--accent-soft-border)">
+        <h2 style="font-size:14.5px;color:#14342a">No SMS/email provider connected yet</h2>
+        <p style="margin:6px 0 12px;font-size:12.5px;color:#245546;line-height:1.6">These toggles control whether an automation would fire — connect a provider to actually send messages. Until then, "Send reminder"/"Nudge" buttons elsewhere just record the request.</p>
+        ${['owner', 'manager'].includes(state.staff.role) ? `<button class="btn" data-nav="settings-notifications">Connect a provider</button>` : ''}
+      </section>`));
+    }
+  }
+
+  // ---------- Settings: General & billing ----------
+  async function pageSettingsGeneral() {
+    const settings = await api('/settings');
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:14px">Gym profile</h2>
+      <div class="grid-2">
+        <label class="field">Gym name<input id="set-gym-name" value="${esc(settings.gym_name)}"></label>
+        <label class="field">Tagline<input id="set-gym-tagline" value="${esc(settings.gym_tagline)}"></label>
+      </div>
     </section>`));
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:14px">Currency &amp; tax</h2>
+      <div class="grid-2" style="margin-bottom:14px">
+        <label class="field">Currency code<input id="set-currency-code" value="${esc(settings.currency_code)}" placeholder="USD"></label>
+        <label class="field">Currency symbol<input id="set-currency-symbol" value="${esc(settings.currency_symbol)}" placeholder="$"></label>
+      </div>
+      <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;font-weight:600">
+        <button class="toggle-track" id="set-gst-toggle" style="background:${settings.gst_enabled === '1' ? 'var(--accent)' : '#dcded7'}"><span class="toggle-knob" style="left:${settings.gst_enabled === '1' ? 18 : 2}px"></span></button>
+        Charge GST on memberships and day passes
+      </label>
+      <div class="grid-2">
+        <label class="field">GST number<input id="set-gst-number" value="${esc(settings.gst_number)}" placeholder="29ABCDE1234F1Z5"></label>
+        <label class="field">GST percentage<input id="set-gst-percentage" type="number" min="0" max="100" step="0.1" value="${esc(settings.gst_percentage)}"></label>
+      </div>
+      <div id="general-error" class="login-error hidden" style="margin-top:14px"></div>
+      <button class="btn btn-primary" data-action="save-general-settings" style="margin-top:14px">Save settings</button>
+    </section>`));
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:14px">Your password</h2>
+      <div class="grid-2" style="margin-bottom:14px">
+        <label class="field">Current password<input id="pw-current" type="password"></label>
+        <label class="field">New password<input id="pw-new" type="password" placeholder="At least 8 characters"></label>
+      </div>
+      <div id="password-error" class="login-error hidden" style="margin-bottom:12px"></div>
+      <button class="btn" data-action="save-password">Change password</button>
+    </section>`));
+
+    document.getElementById('set-gst-toggle').addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      const on = btn.style.background !== 'var(--accent)';
+      btn.style.background = on ? 'var(--accent)' : '#dcded7';
+      btn.querySelector('.toggle-knob').style.left = on ? '18px' : '2px';
+    });
+  }
+
+  async function saveGeneralSettings() {
+    const errBox = document.getElementById('general-error');
+    const btn = document.querySelector('[data-action="save-general-settings"]');
+    const body = {
+      gym_name: document.getElementById('set-gym-name').value.trim(),
+      gym_tagline: document.getElementById('set-gym-tagline').value.trim(),
+      currency_code: document.getElementById('set-currency-code').value.trim() || 'USD',
+      currency_symbol: document.getElementById('set-currency-symbol').value.trim() || '$',
+      gst_enabled: document.getElementById('set-gst-toggle').style.background === 'var(--accent)' ? '1' : '0',
+      gst_number: document.getElementById('set-gst-number').value.trim(),
+      gst_percentage: document.getElementById('set-gst-percentage').value || '0',
+    };
+    try {
+      await withBusy(btn, () => api('/settings', { method: 'PATCH', body }));
+      toast('Settings saved.', 'success');
+      applyBranding();
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function savePasswordChange() {
+    const errBox = document.getElementById('password-error');
+    const btn = document.querySelector('[data-action="save-password"]');
+    const currentPassword = document.getElementById('pw-current').value;
+    const newPassword = document.getElementById('pw-new').value;
+    if (!newPassword || newPassword.length < 8) {
+      errBox.textContent = 'New password must be at least 8 characters.'; errBox.classList.remove('hidden'); return;
+    }
+    try {
+      await withBusy(btn, () => api('/settings/change-password', { method: 'POST', body: { currentPassword, newPassword } }));
+      toast('Password changed.', 'success');
+      document.getElementById('pw-current').value = '';
+      document.getElementById('pw-new').value = '';
+      errBox.classList.add('hidden');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  // ---------- Settings: Payments ----------
+  async function pageSettingsPayments() {
+    const settings = await api('/settings');
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Payment processor</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">Connect Razorpay to take real card/UPI payments for memberships and day passes. Without a provider connected, billing retries stay simulated so the dunning workflow is still fully usable.</p>
+      <label class="field" style="margin-bottom:14px">Provider
+        <select id="pay-provider">
+          <option value="none" ${settings.payment_provider === 'none' ? 'selected' : ''}>None (simulated)</option>
+          <option value="razorpay" ${settings.payment_provider === 'razorpay' ? 'selected' : ''}>Razorpay</option>
+        </select>
+      </label>
+      <div id="razorpay-fields" class="${settings.payment_provider === 'razorpay' ? '' : 'hidden'}">
+        <label class="field" style="margin-bottom:12px">Key ID<input id="pay-key-id" value="${esc(settings.razorpay_key_id)}" placeholder="rzp_live_..."></label>
+        <label class="field" style="margin-bottom:12px">Key secret<input id="pay-key-secret" type="password" value="${esc(settings.razorpay_key_secret)}" placeholder="${settings.razorpay_key_secret ? 'Leave as-is to keep current secret' : 'Secret key'}"></label>
+        <label class="field">Webhook secret (optional)<input id="pay-webhook-secret" type="password" value="${esc(settings.razorpay_webhook_secret)}" placeholder="For the /api/payments/razorpay/webhook endpoint"></label>
+      </div>
+      <div id="payments-error" class="login-error hidden" style="margin-top:14px"></div>
+      <button class="btn btn-primary" data-action="save-payment-settings" style="margin-top:14px">Save</button>
+    </section>`));
+
+    document.getElementById('pay-provider').addEventListener('change', (e) => {
+      document.getElementById('razorpay-fields').classList.toggle('hidden', e.target.value !== 'razorpay');
+    });
+  }
+
+  async function savePaymentSettings() {
+    const errBox = document.getElementById('payments-error');
+    const btn = document.querySelector('[data-action="save-payment-settings"]');
+    const provider = document.getElementById('pay-provider').value;
+    const body = { payment_provider: provider };
+    if (provider === 'razorpay') {
+      body.razorpay_key_id = document.getElementById('pay-key-id').value.trim();
+      body.razorpay_key_secret = document.getElementById('pay-key-secret').value;
+      body.razorpay_webhook_secret = document.getElementById('pay-webhook-secret').value;
+    }
+    try {
+      await withBusy(btn, () => api('/settings', { method: 'PATCH', body }));
+      toast('Payment settings saved.', 'success');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  // ---------- Settings: Notifications ----------
+  async function pageSettingsNotifications() {
+    const settings = await api('/settings');
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">SMS / email provider</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">Connects the automations on the Reminders page (and "Send reminder"/"Nudge" buttons) to a real sender. Without one, those stay recorded-but-not-sent.</p>
+      <label class="field" style="margin-bottom:14px">Provider
+        <select id="notif-provider">
+          <option value="none" ${settings.notification_provider === 'none' ? 'selected' : ''}>None</option>
+          <option value="twilio" ${settings.notification_provider === 'twilio' ? 'selected' : ''}>Twilio (SMS)</option>
+          <option value="msg91" ${settings.notification_provider === 'msg91' ? 'selected' : ''}>MSG91 (SMS)</option>
+          <option value="smtp" ${settings.notification_provider === 'smtp' ? 'selected' : ''}>SMTP (Email)</option>
+        </select>
+      </label>
+      <div id="notif-fields" class="${settings.notification_provider === 'none' ? 'hidden' : ''}">
+        <label class="field" style="margin-bottom:12px">API key / credentials<input id="notif-api-key" type="password" value="${esc(settings.notification_api_key)}" placeholder="${settings.notification_api_key ? 'Leave as-is to keep current key' : ''}"></label>
+        <label class="field">From (number, sender ID, or email address)<input id="notif-from" value="${esc(settings.notification_from)}"></label>
+      </div>
+      <div id="notif-error" class="login-error hidden" style="margin-top:14px"></div>
+      <button class="btn btn-primary" data-action="save-notification-settings" style="margin-top:14px">Save</button>
+    </section>`));
+
+    document.getElementById('notif-provider').addEventListener('change', (e) => {
+      document.getElementById('notif-fields').classList.toggle('hidden', e.target.value === 'none');
+    });
+  }
+
+  async function saveNotificationSettings() {
+    const errBox = document.getElementById('notif-error');
+    const btn = document.querySelector('[data-action="save-notification-settings"]');
+    const provider = document.getElementById('notif-provider').value;
+    const body = { notification_provider: provider };
+    if (provider !== 'none') {
+      body.notification_api_key = document.getElementById('notif-api-key').value;
+      body.notification_from = document.getElementById('notif-from').value.trim();
+    }
+    try {
+      await withBusy(btn, () => api('/settings', { method: 'PATCH', body }));
+      toast('Notification settings saved.', 'success');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  // ---------- Settings: Backup ----------
+  async function pageSettingsBackup() {
+    const [backups, sysInfo] = await Promise.all([api('/backup'), api('/system/info')]);
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Backups</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">A backup is taken automatically on every boot and once a day while running. Download one any time, or make one right now.</p>
+      <button class="btn" data-action="run-backup-now">Back up now</button>
+    </section>`));
+    pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+      <div class="card-header"><h2>Recent backups</h2><span class="count">${backups.length}</span></div>
+      <table class="data-table"><thead><tr><th>File</th><th>Size</th><th>Created</th><th></th></tr></thead>
+      <tbody>${backups.length ? backups.map((b) => `<tr>
+          <td class="mono" style="font-size:12px">${esc(b.filename)}</td>
+          <td class="mono" style="font-size:12px">${(b.sizeBytes / 1024).toFixed(0)} KB</td>
+          <td class="mono" style="font-size:12px;color:var(--muted)">${new Date(b.createdAt).toLocaleString()}</td>
+          <td><a class="btn-outline btn-sm" href="/api/backup/download/${encodeURIComponent(b.filename)}" style="text-decoration:none;display:inline-block">Download</a></td>
+        </tr>`).join('') : `<tr><td colspan="4" class="empty-state">No backups yet.</td></tr>`}</tbody></table>
+    </section>`));
+    pageRoot.appendChild(el(`<section class="card card-pad" style="border-color:#f0c9c9">
+      <h2 style="font-size:14.5px;color:var(--danger-fg);margin-bottom:6px">Restore from a backup file</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">This replaces everything currently in the app with the contents of the file you pick, and restarts the application. The current data is safety-copied first, but this cannot otherwise be undone.</p>
+      <input type="file" id="restore-file-input" accept=".db">
+      <div id="restore-error" class="login-error hidden" style="margin-top:12px"></div>
+      <button class="btn" style="margin-top:12px;border-color:var(--danger-fg);color:var(--danger-fg)" data-action="restore-backup">Restore from file…</button>
+    </section>`));
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Reach this app from a phone on the same wifi</h2>
+      <div class="mono" style="font-size:13px;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${sysInfo.memberAppUrls[0] || sysInfo.localMemberAppUrl}</div>
+    </section>`));
+  }
+
+  async function runBackupNow() {
+    try {
+      await api('/backup/run', { method: 'POST' });
+      toast('Backup created.', 'success');
+      renderPage('settings-backup');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function restoreBackup() {
+    const fileInput = document.getElementById('restore-file-input');
+    const errBox = document.getElementById('restore-error');
+    const file = fileInput.files[0];
+    if (!file) { errBox.textContent = 'Choose a .db file first.'; errBox.classList.remove('hidden'); return; }
+    const ok = await confirmDialog({
+      title: 'Restore from this backup?', danger: true, confirmLabel: 'Restore and restart',
+      body: `This replaces all current data with "${file.name}" and restarts the application. This cannot be undone.`,
+    });
+    if (!ok) return;
+    const btn = document.querySelector('[data-action="restore-backup"]');
+    try {
+      const buffer = await file.arrayBuffer();
+      await withBusy(btn, () => fetch('/api/backup/restore', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buffer,
+      }).then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Restore failed');
+        return data;
+      }));
+      toast('Restored — the application is restarting…', 'success');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
   }
 
   // ---------- Modals: wizard, day pass, workout plan ----------
@@ -765,6 +1114,300 @@
       if (state.route === 'members' || state.route === 'today') renderPage(state.route);
     } catch (err) {
       if (hint) hint.textContent = err.message;
+    }
+  }
+
+  function openMemberEditModal(memberId) {
+    const m = state.members.detailCache;
+    if (!m || m.id !== memberId) return;
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="member-edit-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Edit ${esc(m.name)}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Full name<input id="me-name" value="${esc(m.name)}"></label>
+        <label class="field" style="margin-bottom:12px">Mobile<input id="me-phone" value="${esc(m.phone)}"></label>
+        <label class="field" style="margin-bottom:12px">Email<input id="me-email" type="email" value="${esc(m.email || '')}"></label>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Emergency contact<input id="me-emergency-name" value="${esc(m.emergencyName || '')}"></label>
+          <label class="field">Emergency phone<input id="me-emergency-phone" value="${esc(m.emergencyPhone || '')}"></label>
+        </div>
+        <label class="field" style="margin-bottom:12px">Access method
+          <select id="me-access">
+            <option value="qr" ${m.accessMethod === 'qr' ? 'selected' : ''}>QR only</option>
+            <option value="fob" ${m.accessMethod === 'fob' ? 'selected' : ''}>Fob only</option>
+            <option value="qr_fob" ${m.accessMethod === 'qr_fob' ? 'selected' : ''}>QR + fob</option>
+          </select>
+        </label>
+        <label class="field">Notes<textarea id="me-notes" rows="3" style="border:1px solid #dcded7;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit">${esc(m.notes || '')}</textarea></label>
+        <div id="member-edit-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-member-edit" data-id="${memberId}">Save changes</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitMemberEdit(memberId) {
+    const nameEl = document.getElementById('me-name');
+    const phoneEl = document.getElementById('me-phone');
+    const body = {
+      name: nameEl.value.trim(), phone: phoneEl.value.trim(),
+      email: document.getElementById('me-email').value.trim() || null,
+      emergencyName: document.getElementById('me-emergency-name').value.trim() || null,
+      emergencyPhone: document.getElementById('me-emergency-phone').value.trim() || null,
+      accessMethod: document.getElementById('me-access').value,
+      notes: document.getElementById('me-notes').value.trim() || null,
+    };
+    const errBox = document.getElementById('member-edit-error');
+    if (!body.name) { markInvalid(nameEl, 'Name is required.'); return; }
+    if (!body.phone) { markInvalid(phoneEl, 'Mobile is required.'); return; }
+    const btn = document.querySelector('[data-action="submit-member-edit"]');
+    try {
+      await withBusy(btn, () => api(`/members/${memberId}`, { method: 'PATCH', body }));
+      closeModal();
+      toast('Member updated.', 'success');
+      renderPage('members');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function openPlanModal(planId) {
+    const editing = planId ? (state.plansCache || []).find((p) => p.id === planId) : null;
+    const periods = await api('/plans/periods');
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="plan-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${editing ? 'Edit plan' : 'Add plan'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Plan name<input id="plan-name" value="${esc(editing?.name || '')}" placeholder="e.g. Unlimited"></label>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Price<input id="plan-price" type="number" min="0" step="0.01" value="${editing ? (editing.priceCents / 100).toFixed(2) : ''}" placeholder="89.00"></label>
+          <label class="field">Billing period
+            <select id="plan-period">${periods.map((p) => `<option value="${p.value}" ${editing?.billingPeriod === p.value ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>
+          </label>
+        </div>
+        <label class="field" style="margin-bottom:12px">Description<input id="plan-desc" value="${esc(editing?.desc || '')}" placeholder="What members get"></label>
+        <label class="field">Tag (optional)<input id="plan-tag" value="${esc(editing?.tag || '')}" placeholder="e.g. Most popular"></label>
+        <div id="plan-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-plan" data-id="${planId || ''}">${editing ? 'Save changes' : 'Add plan'}</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitPlanModal(planId) {
+    const nameEl = document.getElementById('plan-name');
+    const priceEl = document.getElementById('plan-price');
+    const name = nameEl.value.trim();
+    const priceCents = Math.round(parseFloat(priceEl.value) * 100);
+    const billingPeriod = document.getElementById('plan-period').value;
+    const description = document.getElementById('plan-desc').value.trim();
+    const tag = document.getElementById('plan-tag').value.trim();
+    const errBox = document.getElementById('plan-error');
+    if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
+    if (!priceCents || priceCents <= 0) { markInvalid(priceEl, 'Enter a valid price.'); return; }
+    const btn = document.querySelector('[data-action="submit-plan"]');
+    try {
+      await withBusy(btn, () => api(planId ? `/plans/${planId}` : '/plans', {
+        method: planId ? 'PATCH' : 'POST',
+        body: { name, priceCents, billingPeriod, description: description || null, tag: tag || null },
+      }));
+      closeModal();
+      toast(planId ? 'Plan updated.' : 'Plan added.', 'success');
+      renderPage('plans');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function togglePlanActive(id, activate) {
+    try {
+      await api(`/plans/${id}/${activate ? 'reactivate' : 'deactivate'}`, { method: 'POST' });
+      toast(activate ? 'Plan reactivated.' : 'Plan deactivated.', 'success');
+      renderPage('plans');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  function openStaffModal(staffId) {
+    const editing = staffId ? (state.staffCache || []).find((s) => s.id === staffId) : null;
+    const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff']];
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="staff-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${editing ? 'Edit staff' : 'Add staff'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Full name<input id="staff-name" value="${esc(editing?.name || '')}" placeholder="Jamie Rivera"></label>
+        <label class="field" style="margin-bottom:12px">Email<input id="staff-email" type="email" value="${esc(editing?.email || '')}" placeholder="jamie@forgeroom.gym"></label>
+        <label class="field" style="margin-bottom:12px">Phone (optional)<input id="staff-phone" value="${esc(editing?.phone || '')}"></label>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Role
+            <select id="staff-role">${ROLES.map(([v, l]) => `<option value="${v}" ${editing?.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          </label>
+          <label class="field">Console access
+            <select id="staff-access">
+              <option value="limited" ${editing?.access !== 'full' ? 'selected' : ''}>Limited</option>
+              <option value="full" ${editing?.access === 'full' ? 'selected' : ''}>Full console</option>
+            </select>
+          </label>
+        </div>
+        ${editing ? '' : `<label class="field">Temporary password<input id="staff-password" type="password" placeholder="At least 8 characters"></label>`}
+        <div id="staff-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-staff" data-id="${staffId || ''}">${editing ? 'Save changes' : 'Add staff'}</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitStaffModal(staffId) {
+    const nameEl = document.getElementById('staff-name');
+    const emailEl = document.getElementById('staff-email');
+    const name = nameEl.value.trim();
+    const email = emailEl.value.trim();
+    const phone = document.getElementById('staff-phone').value.trim();
+    const role = document.getElementById('staff-role').value;
+    const access = document.getElementById('staff-access').value;
+    const errBox = document.getElementById('staff-error');
+    if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
+    if (!email) { markInvalid(emailEl, 'Email is required.'); return; }
+    const body = { name, email, phone: phone || null, role, access };
+    if (!staffId) {
+      const pwEl = document.getElementById('staff-password');
+      if (!pwEl.value || pwEl.value.length < 8) { markInvalid(pwEl, 'At least 8 characters.'); return; }
+      body.password = pwEl.value;
+    }
+    const btn = document.querySelector('[data-action="submit-staff"]');
+    try {
+      await withBusy(btn, () => api(staffId ? `/team/${staffId}` : '/team', { method: staffId ? 'PATCH' : 'POST', body }));
+      closeModal();
+      toast(staffId ? 'Staff account updated.' : 'Staff account created.', 'success');
+      renderPage('team');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function toggleStaffActive(id, activate) {
+    try {
+      await api(`/team/${id}/${activate ? 'reactivate' : 'deactivate'}`, { method: 'POST' });
+      toast(activate ? 'Staff account reactivated.' : 'Staff account deactivated.', 'success');
+      renderPage('team');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function resetStaffPassword(id) {
+    const newPassword = await promptDialog({
+      title: 'Reset staff password', label: 'New temporary password', placeholder: 'At least 8 characters',
+      inputType: 'password', confirmLabel: 'Reset password',
+    });
+    if (!newPassword) return;
+    if (newPassword.length < 8) { toast('Password must be at least 8 characters.', 'error'); return; }
+    try {
+      await api(`/team/${id}/reset-password`, { method: 'POST', body: { newPassword } });
+      toast('Password reset.', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function openClassModal(classId) {
+    const editing = classId ? (state.classesCache || []).find((c) => c.id === classId) : null;
+    const coaches = await api('/team/admin').catch(() => []);
+    const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="class-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${editing ? 'Edit class' : 'New class'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Class name<input id="class-name" value="${esc(editing?.name || '')}" placeholder="e.g. Barbell Club"></label>
+        <label class="field" style="margin-bottom:12px">Coach
+          <select id="class-coach"><option value="">Unassigned</option>${coaches.map((c) => `<option value="${c.id}" ${editing?.coachId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+        </label>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Day of week
+            <select id="class-day">${DAYS.map((d, i) => `<option value="${i}" ${editing?.dayOfWeek === i ? 'selected' : ''}>${d}</option>`).join('')}</select>
+          </label>
+          <label class="field">Start time<input id="class-time" type="time" value="${esc(editing?.startTime || '18:00')}"></label>
+        </div>
+        <div class="grid-2">
+          <label class="field">Duration (min)<input id="class-duration" type="number" min="10" value="${editing?.durationMin || 45}"></label>
+          <label class="field">Capacity<input id="class-capacity" type="number" min="1" value="${editing?.capacity || 12}"></label>
+        </div>
+        <div id="class-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-class" data-id="${classId || ''}">${editing ? 'Save changes' : 'Create class'}</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitClassModal(classId) {
+    const nameEl = document.getElementById('class-name');
+    const name = nameEl.value.trim();
+    const coachId = document.getElementById('class-coach').value || null;
+    const dayOfWeek = Number(document.getElementById('class-day').value);
+    const startTime = document.getElementById('class-time').value;
+    const durationMin = Number(document.getElementById('class-duration').value) || 45;
+    const capacity = Number(document.getElementById('class-capacity').value) || 12;
+    const errBox = document.getElementById('class-error');
+    if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
+    const btn = document.querySelector('[data-action="submit-class"]');
+    try {
+      await withBusy(btn, () => api(classId ? `/classes/${classId}` : '/classes', {
+        method: classId ? 'PATCH' : 'POST',
+        body: { name, coachId: coachId ? Number(coachId) : null, dayOfWeek, startTime, durationMin, capacity },
+      }));
+      closeModal();
+      toast(classId ? 'Class updated.' : 'Class created.', 'success');
+      renderPage('classes');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function toggleClassActive(id, activate) {
+    try {
+      await api(`/classes/${id}/${activate ? 'resume' : 'suspend'}`, { method: 'POST' });
+      toast(activate ? 'Class resumed.' : 'Class suspended.', 'success');
+      renderPage('classes');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function deleteClass(id) {
+    const ok = await confirmDialog({
+      title: 'Delete this class?', danger: true, confirmLabel: 'Delete class',
+      body: 'This removes the class and every scheduled session and booking under it. This cannot be undone — suspending instead keeps the history.',
+    });
+    if (!ok) return;
+    try {
+      await api(`/classes/${id}`, { method: 'DELETE' });
+      toast('Class deleted.', 'success');
+      renderPage('classes');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function newClassSession(classId) {
+    const cls = (state.classesCache || []).find((c) => c.id === classId);
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="session-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Add session</h2><p>${esc(cls?.name || '')}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Date<input id="session-date" type="date"></label>
+        <label class="field">Start time<input id="session-time" type="time" value="${esc(cls?.startTime || '18:00')}"></label>
+        <div id="session-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-class-session" data-id="${classId}">Add session</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitClassSession(classId) {
+    const dateEl = document.getElementById('session-date');
+    const sessionDate = dateEl.value;
+    const startTime = document.getElementById('session-time').value;
+    const errBox = document.getElementById('session-error');
+    if (!sessionDate) { markInvalid(dateEl, 'Pick a date.'); return; }
+    const btn = document.querySelector('[data-action="submit-class-session"]');
+    try {
+      await withBusy(btn, () => api(`/classes/${classId}/sessions`, { method: 'POST', body: { sessionDate, startTime } }));
+      closeModal();
+      toast('Session added.', 'success');
+      renderPage('classes');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
     }
   }
 
@@ -980,8 +1623,9 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay'];
     if (!a) {
-      if (e.target.id === 'wizard-overlay' || e.target.id === 'daypass-overlay' || e.target.id === 'wp-overlay') closeModal();
+      if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;
     }
     const action = a.dataset.action;
@@ -1001,6 +1645,33 @@
     else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id), a);
     else if (action === 'retry-all') retryAll(a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
+    else if (action === 'edit-member') openMemberEditModal(state.members.selectedId);
+    else if (action === 'submit-member-edit') submitMemberEdit(Number(a.dataset.id));
+    else if (action === 'open-plan-modal') openPlanModal();
+    else if (action === 'edit-plan') openPlanModal(Number(a.dataset.id));
+    else if (action === 'submit-plan') submitPlanModal(a.dataset.id ? Number(a.dataset.id) : null);
+    else if (action === 'deactivate-plan') togglePlanActive(Number(a.dataset.id), false);
+    else if (action === 'reactivate-plan') togglePlanActive(Number(a.dataset.id), true);
+    else if (action === 'open-staff-modal') openStaffModal();
+    else if (action === 'edit-staff') openStaffModal(Number(a.dataset.id));
+    else if (action === 'submit-staff') submitStaffModal(a.dataset.id ? Number(a.dataset.id) : null);
+    else if (action === 'deactivate-staff') toggleStaffActive(Number(a.dataset.id), false);
+    else if (action === 'reactivate-staff') toggleStaffActive(Number(a.dataset.id), true);
+    else if (action === 'reset-staff-password') resetStaffPassword(Number(a.dataset.id));
+    else if (action === 'open-class-modal') openClassModal();
+    else if (action === 'edit-class') openClassModal(Number(a.dataset.id));
+    else if (action === 'submit-class') submitClassModal(a.dataset.id ? Number(a.dataset.id) : null);
+    else if (action === 'suspend-class') toggleClassActive(Number(a.dataset.id), false);
+    else if (action === 'resume-class') toggleClassActive(Number(a.dataset.id), true);
+    else if (action === 'delete-class') deleteClass(Number(a.dataset.id));
+    else if (action === 'new-class-session') newClassSession(Number(a.dataset.id));
+    else if (action === 'submit-class-session') submitClassSession(Number(a.dataset.id));
+    else if (action === 'save-general-settings') saveGeneralSettings();
+    else if (action === 'save-password') savePasswordChange();
+    else if (action === 'save-payment-settings') savePaymentSettings();
+    else if (action === 'save-notification-settings') saveNotificationSettings();
+    else if (action === 'run-backup-now') runBackupNow();
+    else if (action === 'restore-backup') restoreBackup();
   });
   function closeModalIfAny() { closeModal(); }
 

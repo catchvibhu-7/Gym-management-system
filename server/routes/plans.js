@@ -1,30 +1,73 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff } = require('../auth');
-const { money, newCode, todayISO } = require('../utils');
+const { money, newCode, todayISO, periodInfo, monthlyEquivalentCents, BILLING_PERIODS } = require('../utils');
 
 const router = express.Router();
 router.use(requireStaff());
 
+router.get('/periods', (req, res) => {
+  res.json(Object.entries(BILLING_PERIODS).map(([value, info]) => ({ value, label: info.label })));
+});
+
 router.get('/', (req, res) => {
-  const plans = db.prepare('SELECT * FROM plans WHERE active = 1 ORDER BY sort_order').all();
-  const totalMembers = db.prepare(`SELECT COUNT(*) c FROM members WHERE status IN ('active','past_due')`).get().c || 1;
-  const totalRevenue = db.prepare(`SELECT COALESCE(SUM(monthly_price_cents),0) c FROM memberships WHERE status = 'active'`).get().c || 1;
+  const includeInactive = req.query.all === '1';
+  const plans = db.prepare(`SELECT * FROM plans ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY sort_order, id`).all();
+  const totalRevenue = db.prepare(
+    `SELECT mo.monthly_price_cents amt, mo.billing_period bp FROM memberships mo WHERE mo.status = 'active'`
+  ).all().reduce((sum, r) => sum + monthlyEquivalentCents(r.amt, r.bp), 0) || 1;
 
   res.json(plans.map((p) => {
     const memberCount = db.prepare(
       `SELECT COUNT(*) c FROM memberships WHERE plan_id = ? AND status = 'active'`
     ).get(p.id).c;
-    const revenue = memberCount * p.price_cents;
+    const monthlyEq = monthlyEquivalentCents(p.price_cents, p.billing_period) * memberCount;
     return {
-      id: p.id, name: p.name, price: money(p.price_cents), desc: p.description, tag: p.tag,
-      members: memberCount, share: `${Math.round((revenue / totalRevenue) * 100)}%`,
+      id: p.id, name: p.name, price: money(p.price_cents), priceCents: p.price_cents,
+      billingPeriod: p.billing_period, periodLabel: periodInfo(p.billing_period).label,
+      desc: p.description, tag: p.tag, active: !!p.active,
+      members: memberCount, share: `${Math.round((monthlyEq / totalRevenue) * 100)}%`,
       cardStyle: 'background:#fff;border:1px solid #e2e3de;border-radius:14px;padding:20px',
       tagStyle: p.tag ? 'display:inline-block;font-size:11px;font-weight:700;background:#e6f2ed;color:#0e5f4a;padding:4px 9px;border-radius:999px' : '',
       perStyle: 'font-size:13px;color:#6b6f68', descStyle: 'font-size:12.5px;color:#6b6f68;margin:8px 0;line-height:1.5',
       statStyle: 'font-size:12px;color:#6b6f68',
     };
   }));
+});
+
+router.post('/', requireStaff('owner', 'manager'), (req, res) => {
+  const { name, priceCents, billingPeriod = 'monthly', description, tag } = req.body || {};
+  if (!name || !priceCents || priceCents <= 0) return res.status(400).json({ error: 'Name and a positive price are required' });
+  if (!BILLING_PERIODS[billingPeriod]) return res.status(400).json({ error: 'Invalid billing period' });
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) m FROM plans').get().m;
+  const info = db.prepare(
+    `INSERT INTO plans (name, price_cents, billing_period, description, tag, sort_order) VALUES (?,?,?,?,?,?)`
+  ).run(name, priceCents, billingPeriod, description || null, tag || null, maxOrder + 1);
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'Not found' });
+  const { name, priceCents, billingPeriod, description, tag } = req.body || {};
+  if (billingPeriod && !BILLING_PERIODS[billingPeriod]) return res.status(400).json({ error: 'Invalid billing period' });
+  db.prepare(
+    `UPDATE plans SET name = ?, price_cents = ?, billing_period = ?, description = ?, tag = ? WHERE id = ?`
+  ).run(
+    name ?? plan.name, priceCents ?? plan.price_cents, billingPeriod ?? plan.billing_period,
+    description ?? plan.description, tag ?? plan.tag, plan.id
+  );
+  res.json({ ok: true });
+});
+
+router.post('/:id/deactivate', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE plans SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/reactivate', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE plans SET active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 router.get('/day-pass-types', (req, res) => {

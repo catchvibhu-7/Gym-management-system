@@ -1,12 +1,13 @@
 const express = require('express');
 const { db } = require('../db');
-const { requireStaff } = require('../auth');
+const { requireStaff, hashPassword } = require('../auth');
 const { initialsOf } = require('../utils');
 
 const router = express.Router();
 router.use(requireStaff());
 
 const ROLE_LABEL = { owner: 'Owner', manager: 'Manager', coach: 'Coach', desk: 'Desk staff' };
+const VALID_ROLES = ['owner', 'manager', 'coach', 'desk'];
 
 router.get('/', (req, res) => {
   const staff = db.prepare('SELECT * FROM staff WHERE active = 1 ORDER BY role, name').all();
@@ -32,6 +33,68 @@ router.get('/on-floor', (req, res) => {
      WHERE c.checked_out_at IS NULL AND c.checked_in_at >= datetime('now','-6 hours')`
   ).all();
   res.json(rows.map((r) => ({ initials: initialsOf(r.name), name: r.name, until: 'now' })));
+});
+
+// ---- Staff management (owner/manager only) ----
+
+router.get('/admin', requireStaff('owner', 'manager'), (req, res) => {
+  const rows = db.prepare('SELECT id, name, email, phone, role, access, active FROM staff ORDER BY active DESC, role, name').all();
+  res.json(rows.map((s) => ({ ...s, initials: initialsOf(s.name), roleLabel: ROLE_LABEL[s.role] })));
+});
+
+router.post('/', requireStaff('owner', 'manager'), (req, res) => {
+  const { name, email, phone, role, access = 'limited', password } = req.body || {};
+  if (!name || !email || !role || !password) {
+    return res.status(400).json({ error: 'Name, email, role and password are required' });
+  }
+  if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  const existing = db.prepare('SELECT id FROM staff WHERE email = ?').get(email.trim().toLowerCase());
+  if (existing) return res.status(409).json({ error: 'A staff account with this email already exists' });
+
+  const info = db.prepare(
+    `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,?)`
+  ).run(name, role, email.trim().toLowerCase(), phone || null, hashPassword(password), access === 'full' ? 'full' : 'limited');
+  res.status(201).json({ id: info.lastInsertRowid, name, role });
+});
+
+router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const staffRow = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
+  if (!staffRow) return res.status(404).json({ error: 'Not found' });
+  const { name, email, phone, role, access } = req.body || {};
+  if (role && !VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  const nextEmail = email ? email.trim().toLowerCase() : staffRow.email;
+  db.prepare(
+    `UPDATE staff SET name = ?, email = ?, phone = ?, role = ?, access = ? WHERE id = ?`
+  ).run(
+    name ?? staffRow.name, nextEmail,
+    phone ?? staffRow.phone, role ?? staffRow.role, access ?? staffRow.access, staffRow.id
+  );
+  res.json({ ok: true });
+});
+
+router.post('/:id/deactivate', requireStaff('owner', 'manager'), (req, res) => {
+  if (Number(req.params.id) === req.staff.id) {
+    return res.status(400).json({ error: "You can't deactivate your own account" });
+  }
+  db.prepare('UPDATE staff SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/reactivate', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE staff SET active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/reset-password', requireStaff('owner', 'manager'), (req, res) => {
+  const { newPassword } = req.body || {};
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  }
+  const staffRow = db.prepare('SELECT id FROM staff WHERE id = ?').get(req.params.id);
+  if (!staffRow) return res.status(404).json({ error: 'Not found' });
+  db.prepare('UPDATE staff SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), staffRow.id);
+  res.json({ ok: true });
 });
 
 module.exports = router;

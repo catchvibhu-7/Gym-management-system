@@ -9,16 +9,23 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
-const PORT = process.env.PORT || 3300;
-process.env.PORT = String(PORT);
-
 let mainWindow = null;
 let httpServer = null;
+let boundPort = null;
 
-function startServer() {
-  // server/index.js starts listening as a side effect of being required
-  // and exports the http.Server instance so it can be closed on quit.
-  httpServer = require('../server/index.js');
+async function boot() {
+  const { startServer } = require('../server/index.js');
+  const { server, port } = await startServer();
+  httpServer = server;
+  boundPort = port;
+
+  // A restore-from-backup needs the whole process to come back, not just
+  // the embedded server - relaunching the Electron app does that cleanly,
+  // instead of the plain-Node default of just exiting.
+  require('../server/backup').setRestoreHandler(() => {
+    app.relaunch();
+    app.exit(0);
+  });
 }
 
 function buildMenu() {
@@ -63,7 +70,7 @@ function buildMenu() {
             type: 'info',
             title: 'Forge Room Owner Console',
             message: 'Forge Room Owner Console',
-            detail: `Local gym management desktop app.\nServer: http://localhost:${PORT}\n\nAll data stays on this machine.`,
+            detail: `Local gym management desktop app.\nServer: http://localhost:${boundPort}\n\nAll data stays on this machine.`,
           }),
         },
       ],
@@ -90,20 +97,20 @@ function createWindow() {
   });
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.loadURL(`http://localhost:${PORT}/console/`);
+  mainWindow.loadURL(`http://localhost:${boundPort}/console/`);
 
   // Keep the app window on the console/kiosk UI; anything that would
   // navigate to an outside URL (e.g. a future "help" link) opens in the
   // system browser instead of hijacking the app window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(`http://localhost:${PORT}`)) {
+    if (!url.startsWith(`http://localhost:${boundPort}`)) {
       shell.openExternal(url);
       return { action: 'deny' };
     }
     return { action: 'allow' };
   });
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(`http://localhost:${PORT}`)) {
+    if (!url.startsWith(`http://localhost:${boundPort}`)) {
       event.preventDefault();
       shell.openExternal(url);
     }
@@ -119,9 +126,9 @@ app.on('second-instance', () => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
-    startServer();
+    await boot();
   } catch (err) {
     dialog.showErrorBox('Forge Room failed to start', String(err && err.stack || err));
     app.quit();

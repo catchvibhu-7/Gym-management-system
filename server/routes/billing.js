@@ -1,7 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff } = require('../auth');
-const { money, initialsOf } = require('../utils');
+const { money, initialsOf, monthlyEquivalentCents } = require('../utils');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -17,8 +17,8 @@ function chip(status) {
 
 router.get('/stats', (req, res) => {
   const mrr = db.prepare(
-    `SELECT COALESCE(SUM(monthly_price_cents),0) c FROM memberships WHERE status = 'active'`
-  ).get().c;
+    `SELECT monthly_price_cents amt, billing_period bp FROM memberships WHERE status = 'active'`
+  ).all().reduce((sum, r) => sum + monthlyEquivalentCents(r.amt, r.bp), 0);
   const collectedThisMonth = db.prepare(
     `SELECT COALESCE(SUM(amount_cents),0) c FROM invoices WHERE status = 'paid' AND paid_at >= date('now','start of month')`
   ).get().c;
@@ -31,7 +31,7 @@ router.get('/stats', (req, res) => {
       { label: 'Monthly recurring revenue', value: money(mrr), note: `${memberCount} active memberships` },
       { label: 'Collected this month', value: money(collectedThisMonth), note: 'Paid invoices, current month' },
       { label: 'Failed payments', value: String(failedCount), note: `${money(failedAmount)} to recover` },
-      { label: 'Active members', value: String(memberCount), note: 'Billed monthly' },
+      { label: 'Active members', value: String(memberCount), note: 'Across all billing periods' },
     ],
   });
 });

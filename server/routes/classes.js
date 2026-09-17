@@ -8,6 +8,61 @@ router.use(requireStaff());
 
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
+router.get('/list', (req, res) => {
+  const includeInactive = req.query.all === '1';
+  const rows = db.prepare(
+    `SELECT cl.*, s.name coach_name FROM classes cl LEFT JOIN staff s ON s.id = cl.coach_staff_id
+     ${includeInactive ? '' : 'WHERE cl.active = 1'} ORDER BY cl.day_of_week, cl.start_time`
+  ).all();
+  res.json(rows.map((c) => ({
+    id: c.id, name: c.name, coachId: c.coach_staff_id, coach: c.coach_name || 'Unassigned',
+    dayOfWeek: c.day_of_week, dayLabel: DAY_LABELS[c.day_of_week],
+    startTime: c.start_time, durationMin: c.duration_min, capacity: c.capacity, active: !!c.active,
+  })));
+});
+
+router.post('/', requireStaff('owner', 'manager'), (req, res) => {
+  const { name, coachId, dayOfWeek, startTime, durationMin = 45, capacity = 12 } = req.body || {};
+  if (!name || dayOfWeek === undefined || !startTime) {
+    return res.status(400).json({ error: 'Name, day of week and start time are required' });
+  }
+  const info = db.prepare(
+    `INSERT INTO classes (name, coach_staff_id, day_of_week, start_time, duration_min, capacity) VALUES (?,?,?,?,?,?)`
+  ).run(name, coachId || null, dayOfWeek, startTime, durationMin, capacity);
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const cls = db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id);
+  if (!cls) return res.status(404).json({ error: 'Not found' });
+  const { name, coachId, dayOfWeek, startTime, durationMin, capacity } = req.body || {};
+  db.prepare(
+    `UPDATE classes SET name = ?, coach_staff_id = ?, day_of_week = ?, start_time = ?, duration_min = ?, capacity = ? WHERE id = ?`
+  ).run(
+    name ?? cls.name, coachId !== undefined ? coachId : cls.coach_staff_id,
+    dayOfWeek ?? cls.day_of_week, startTime ?? cls.start_time,
+    durationMin ?? cls.duration_min, capacity ?? cls.capacity, cls.id
+  );
+  res.json({ ok: true });
+});
+
+router.post('/:id/suspend', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE classes SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/resume', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE classes SET active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.delete('/:id', requireStaff('owner', 'manager'), (req, res) => {
+  // Cascades to class_sessions and their bookings (schema FK ON DELETE
+  // CASCADE) - the console warns with a confirm dialog before calling this.
+  db.prepare('DELETE FROM classes WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
 router.get('/week', (req, res) => {
   const today = new Date();
   const monday = addDays(todayISO(), 1 - (today.getDay() === 0 ? 7 : today.getDay()));

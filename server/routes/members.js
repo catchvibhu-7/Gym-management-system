@@ -1,7 +1,8 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff, hashPassword } = require('../auth');
-const { money, initialsOf, newCode } = require('../utils');
+const { money, initialsOf, newCode, periodInfo } = require('../utils');
+const settingsStore = require('../settingsStore');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -81,9 +82,11 @@ router.get('/:id', (req, res) => {
     plan: membership ? membership.plan_name : (m.status === 'trial' ? 'Trial week' : '—'),
     joined: m.joined_at.slice(0, 10),
     visits: visits30, ltv: money(ltv),
-    nextCharge: membership ? `${membership.next_charge_date} · ${money(membership.monthly_price_cents)}` : '—',
+    nextCharge: membership ? `${membership.next_charge_date} · ${money(membership.monthly_price_cents)} (${periodInfo(membership.billing_period).label})` : '—',
     access: m.access_method === 'qr_fob' ? 'QR + fob' : m.access_method === 'qr' ? 'QR only' : m.access_method === 'fob' ? 'Fob only' : 'Paused',
-    phone: m.phone, emergency: m.emergency_name ? `${m.emergency_name} · ${m.emergency_phone}` : 'Not on file',
+    accessMethod: m.access_method,
+    phone: m.phone, email: m.email, emergency: m.emergency_name ? `${m.emergency_name} · ${m.emergency_phone}` : 'Not on file',
+    emergencyName: m.emergency_name, emergencyPhone: m.emergency_phone,
     notes: m.notes, pattern: days.map((v) => ({ style: `flex:1;height:22px;border-radius:4px;background:${v ? '#137a5f' : '#eceded'}` })),
   });
 });
@@ -105,18 +108,41 @@ router.post('/', (req, res) => {
   if (planId) {
     const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
     if (plan) {
+      const gst = settingsStore.applyGst(plan.price_cents + joiningFeeCents);
+      const modifier = periodInfo(plan.billing_period).dateModifier;
+      const membershipId = db.prepare(
+        `INSERT INTO memberships (member_id, plan_id, monthly_price_cents, billing_period, joining_fee_cents, start_date, next_charge_date, status)
+         VALUES (?,?,?,?,?, date('now'), date('now',?), 'active')`
+      ).run(memberId, plan.id, plan.price_cents, plan.billing_period, joiningFeeCents, modifier).lastInsertRowid;
       db.prepare(
-        `INSERT INTO memberships (member_id, plan_id, monthly_price_cents, joining_fee_cents, start_date, next_charge_date, status)
-         VALUES (?,?,?,?, date('now'), date('now','+1 month'), 'active')`
-      ).run(memberId, plan.id, plan.price_cents, joiningFeeCents);
-      db.prepare(
-        `INSERT INTO invoices (member_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method)
-         VALUES (?,?, date('now'), date('now'), date('now'), 'paid', 'card')`
-      ).run(memberId, plan.price_cents + joiningFeeCents);
+        `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method)
+         VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', 'card')`
+      ).run(memberId, membershipId, gst.totalCents);
     }
   }
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);
   res.status(201).json({ id: memberId, name: member.name, qrCode: member.qr_code });
+});
+
+router.patch('/:id', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
+  const { name, phone, email, emergencyName, emergencyPhone, accessMethod, notes } = req.body || {};
+  if (phone && phone !== member.phone) {
+    const clash = db.prepare('SELECT id FROM members WHERE phone = ? AND id != ?').get(phone, member.id);
+    if (clash) return res.status(409).json({ error: 'Another member already uses this phone number' });
+  }
+  const nextAccess = accessMethod ?? member.access_method;
+  const needsFob = (nextAccess === 'fob' || nextAccess === 'qr_fob') && !member.fob_code;
+  db.prepare(
+    `UPDATE members SET name = ?, phone = ?, email = ?, emergency_name = ?, emergency_phone = ?,
+       access_method = ?, fob_code = COALESCE(fob_code, ?), notes = ? WHERE id = ?`
+  ).run(
+    name ?? member.name, phone ?? member.phone, email ?? member.email,
+    emergencyName ?? member.emergency_name, emergencyPhone ?? member.emergency_phone,
+    nextAccess, needsFob ? newCode('FOB') : null, notes ?? member.notes, member.id
+  );
+  res.json({ ok: true });
 });
 
 router.post('/:id/freeze', (req, res) => {

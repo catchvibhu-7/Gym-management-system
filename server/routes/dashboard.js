@@ -1,7 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff } = require('../auth');
-const { money, initialsOf, daysAgo, addDays, todayISO } = require('../utils');
+const { money, initialsOf, daysAgo, addDays, todayISO, monthlyEquivalentCents } = require('../utils');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -11,11 +11,12 @@ router.get('/today', (req, res) => {
     `SELECT COUNT(*) c FROM members WHERE status IN ('active','past_due')`
   ).get().c;
 
-  const mrrRow = db.prepare(
-    `SELECT COALESCE(SUM(mo.monthly_price_cents),0) c FROM memberships mo
+  const activeMemberships = db.prepare(
+    `SELECT mo.monthly_price_cents amt, mo.billing_period bp FROM memberships mo
      JOIN members m ON m.id = mo.member_id
      WHERE mo.status = 'active' AND m.status IN ('active','past_due')`
-  ).get();
+  ).all();
+  const mrrCents = activeMemberships.reduce((sum, r) => sum + monthlyEquivalentCents(r.amt, r.bp), 0);
 
   const newThisMonth = db.prepare(
     `SELECT COUNT(*) c FROM members WHERE joined_at >= date('now','start of month')`
@@ -91,7 +92,7 @@ router.get('/today', (req, res) => {
   }));
 
   res.json({
-    mrr: money(mrrRow.c), mrrTrend: trend,
+    mrr: money(mrrCents), mrrTrend: trend,
     activeMembers, newThisMonth, cancelledThisMonth,
     visitsThisWeek, insideNow, tasks, feed, todayClasses,
   });

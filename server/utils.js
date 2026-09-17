@@ -1,7 +1,8 @@
 const crypto = require('crypto');
 
 function money(cents) {
-  return `$${(cents / 100).toFixed(2).replace(/\.00$/, '')}`;
+  const { currencySymbol } = require('./settingsStore');
+  return `${currencySymbol()}${(cents / 100).toFixed(2).replace(/\.00$/, '')}`;
 }
 
 function initialsOf(name) {
@@ -28,4 +29,24 @@ function addDays(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-module.exports = { money, initialsOf, newCode, todayISO, daysAgo, addDays };
+const BILLING_PERIODS = {
+  monthly: { months: 1, label: 'Monthly', dateModifier: '+1 month' },
+  quarterly: { months: 3, label: 'Quarterly (3 months)', dateModifier: '+3 months' },
+  half_yearly: { months: 6, label: 'Half-yearly (6 months)', dateModifier: '+6 months' },
+  yearly: { months: 12, label: 'Yearly', dateModifier: '+1 year' },
+};
+
+function periodInfo(period) {
+  return BILLING_PERIODS[period] || BILLING_PERIODS.monthly;
+}
+
+// Normalizes any billing period's price to a monthly-equivalent figure,
+// so MRR (monthly recurring revenue) stays a meaningful single number even
+// when plans bill quarterly/half-yearly/yearly.
+function monthlyEquivalentCents(priceCents, period) {
+  return Math.round(priceCents / periodInfo(period).months);
+}
+
+module.exports = {
+  money, initialsOf, newCode, todayISO, daysAgo, addDays, BILLING_PERIODS, periodInfo, monthlyEquivalentCents,
+};
