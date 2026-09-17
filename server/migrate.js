@@ -15,12 +15,12 @@ function ensureColumn(db, table, column, definition) {
 }
 
 // staff.role's CHECK constraint can't be widened with ALTER TABLE in
-// SQLite, so adding the 'kiosk' role means recreating the table. Detected
-// by checking the stored CREATE TABLE text rather than a version counter,
-// so this stays a no-op once already applied.
+// SQLite, so adding a new role means recreating the table. Detected by
+// checking the stored CREATE TABLE text rather than a version counter, so
+// this stays a no-op once already applied.
 function migrateStaffRoleCheck(db) {
   const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'staff'`).get();
-  if (!row || row.sql.includes("'kiosk'")) return;
+  if (!row || row.sql.includes("'admin'")) return;
   db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
@@ -28,7 +28,7 @@ function migrateStaffRoleCheck(db) {
       CREATE TABLE staff_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        role TEXT NOT NULL CHECK (role IN ('owner','manager','coach','desk','kiosk')),
+        role TEXT NOT NULL CHECK (role IN ('owner','manager','coach','desk','kiosk','admin')),
         email TEXT UNIQUE,
         phone TEXT,
         password_hash TEXT NOT NULL,

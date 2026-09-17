@@ -65,12 +65,13 @@ function destroyMemberSession(req, res) {
   res.clearCookie(MEMBER_COOKIE, { path: '/' });
 }
 
-// 'kiosk' is a locked-down role that only ever sees the door check-in
-// screen - it must never be swept in by a bare requireStaff() (which every
-// pre-existing route file uses to mean "any real staff member"). Routes the
-// kiosk role does need call requireStaff(...ALL_STAFF_ROLES) explicitly.
+// 'kiosk' (locked to the door check-in screen) and 'admin' (system-level:
+// backups and setup only, no member/billing/staff data) must never be swept
+// in by a bare requireStaff() - every pre-existing route file uses that to
+// mean "any real staff member with data access". Routes either role does
+// need call requireStaff(...ALL_STAFF_ROLES) or list the role explicitly.
 const STAFF_ROLES = ['owner', 'manager', 'coach', 'desk'];
-const ALL_STAFF_ROLES = [...STAFF_ROLES, 'kiosk'];
+const ALL_STAFF_ROLES = [...STAFF_ROLES, 'kiosk', 'admin'];
 
 function requireStaff(...roles) {
   return (req, res, next) => {

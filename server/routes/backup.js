@@ -5,7 +5,7 @@ const { requireStaff } = require('../auth');
 const backup = require('../backup');
 
 const router = express.Router();
-router.use(requireStaff('owner', 'manager'));
+router.use(requireStaff('owner', 'manager', 'admin'));
 
 router.get('/', (req, res) => {
   res.json(backup.listBackups());

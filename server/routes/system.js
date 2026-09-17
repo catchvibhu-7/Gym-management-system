@@ -1,9 +1,9 @@
 const express = require('express');
-const { requireStaff } = require('../auth');
+const { requireStaff, STAFF_ROLES } = require('../auth');
 const { getLanIPs } = require('../net-utils');
 
 const router = express.Router();
-router.use(requireStaff());
+router.use(requireStaff(...STAFF_ROLES, 'admin'));
 
 router.get('/info', (req, res) => {
   const port = req.socket.localPort;

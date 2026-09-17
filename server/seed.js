@@ -20,11 +20,16 @@ function seed() {
   try {
     db.prepare("INSERT INTO settings (key, value) VALUES ('gym_name','Forge Room'), ('gym_tagline','Strength Club')").run();
 
-    const ownerEmail = process.env.OWNER_EMAIL || 'owner@forgeroom.gym';
-    const ownerPassword = process.env.OWNER_PASSWORD || 'ForgeOwner123!';
-    const ownerId = db.prepare(
+    // The precreated account is a system-level admin, not a gym owner - it
+    // exists only to run backups/restore and to bootstrap the app. It has
+    // no access to member/billing/staff data (see auth.js's STAFF_ROLES).
+    // The real owner account is created via the first-run setup wizard
+    // (GET/POST /api/setup) the first time nobody with role='owner' exists.
+    const adminEmail = process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL || 'admin@forgeroom.gym';
+    const adminPassword = process.env.ADMIN_PASSWORD || process.env.OWNER_PASSWORD || 'ForgeAdmin123!';
+    db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'full')`
-    ).run('Rohan Kapadia', 'owner', ownerEmail, '+1 312 555 0100', hashPassword(ownerPassword)).lastInsertRowid;
+    ).run('System Admin', 'admin', adminEmail, null, hashPassword(adminPassword));
 
     const inesId = db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'limited')`
@@ -215,7 +220,8 @@ function seed() {
 
     db.exec('COMMIT');
     console.log(`Seed complete: ${memberIds.length} members, ${classesDef.length} classes.`);
-    console.log(`Owner login: ${ownerEmail} / ${ownerPassword}`);
+    console.log(`Admin login (system access only, no member/billing data): ${adminEmail} / ${adminPassword}`);
+    console.log('First launch shows a setup wizard to create your real owner account.');
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;

@@ -106,18 +106,23 @@
   function loadingBlock() { return '<div class="loading-block"><span class="spinner"></span>Loading…</div>'; }
 
   // ---------- Nav ----------
+  // 'all' used to mean "every staff role" back when owner/manager/coach/desk
+  // were the only ones that existed. It now has to be spelled out - kiosk
+  // and admin both need to be excluded from every page that touches member/
+  // business data, and 'all' would otherwise wave them straight through.
+  const DATA_STAFF_ROLES = ['owner', 'manager', 'coach', 'desk'];
   const NAV = [
-    { group: 'Overview', items: [{ id: 'today', label: 'Today', roles: 'all' }] },
+    { group: 'Overview', items: [{ id: 'today', label: 'Today', roles: DATA_STAFF_ROLES }] },
     { group: 'Members', items: [
-      { id: 'members', label: 'Members', roles: 'all' },
-      { id: 'attendance', label: 'Attendance', roles: 'all' },
+      { id: 'members', label: 'Members', roles: DATA_STAFF_ROLES },
+      { id: 'attendance', label: 'Attendance', roles: DATA_STAFF_ROLES },
     ] },
     { group: 'Money', items: [
       { id: 'billing', label: 'Billing', roles: ['owner', 'manager', 'desk'] },
       { id: 'plans', label: 'Plans & passes', roles: ['owner', 'manager', 'desk'] },
     ] },
     { group: 'Operations', items: [
-      { id: 'classes', label: 'Classes', roles: 'all' },
+      { id: 'classes', label: 'Classes', roles: DATA_STAFF_ROLES },
       { id: 'team', label: 'Team', roles: ['owner', 'manager'] },
     ] },
     { group: 'Insights', items: [
@@ -128,7 +133,7 @@
       { id: 'settings-general', label: 'General & billing', roles: ['owner', 'manager'] },
       { id: 'settings-payments', label: 'Payments', roles: ['owner', 'manager'] },
       { id: 'settings-notifications', label: 'Notifications', roles: ['owner', 'manager'] },
-      { id: 'settings-backup', label: 'Backup', roles: ['owner', 'manager'] },
+      { id: 'settings-backup', label: 'Backup', roles: ['owner', 'manager', 'admin'] },
       { id: 'settings-passes', label: 'Archived passes', roles: ['owner', 'manager'] },
     ] },
   ];
@@ -197,8 +202,13 @@
     });
   }
 
+  function defaultRouteFor(role) {
+    const allowed = allowedFor(role);
+    return allowed.includes('today') ? 'today' : (allowed[0] || 'today');
+  }
+
   function go(route) {
-    if (!allowedFor(state.staff.role).includes(route)) route = 'today';
+    if (!allowedFor(state.staff.role).includes(route)) route = defaultRouteFor(state.staff.role);
     state.route = route;
     location.hash = route;
     renderNav();
@@ -210,6 +220,10 @@
   // ---------- Boot / auth ----------
   async function boot() {
     try {
+      const setupStatus = await api('/setup/status');
+      if (setupStatus.needsSetup) { showSetupWizard(); return; }
+    } catch (e) { /* if this fails for any reason, fall through to normal login */ }
+    try {
       state.staff = await api('/staff/me');
       if (state.staff.role === 'kiosk') { showKioskLocked(); return; }
       showApp();
@@ -220,7 +234,18 @@
 
   function showLogin() {
     document.getElementById('login-view').classList.remove('hidden');
+    document.getElementById('setup-view').classList.add('hidden');
     document.getElementById('app-shell').classList.add('hidden');
+  }
+
+  // First run only: nobody with role='owner' exists yet, so there's no real
+  // login to offer. The precreated admin account can't run the gym (see
+  // auth.js's STAFF_ROLES) - it exists solely so this wizard has something
+  // to boot from. Submitting logs the new owner straight in.
+  function showSetupWizard() {
+    document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('app-shell').classList.add('hidden');
+    document.getElementById('setup-view').classList.remove('hidden');
   }
 
   // A kiosk-role account has no console to show at all - it goes straight
@@ -234,12 +259,18 @@
 
   function showApp() {
     document.getElementById('login-view').classList.add('hidden');
+    document.getElementById('setup-view').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
     document.getElementById('whoami-initials').textContent = initials(state.staff.name);
     document.getElementById('whoami-name').textContent = state.staff.name;
     document.getElementById('whoami-role').textContent = state.staff.role[0].toUpperCase() + state.staff.role.slice(1);
+    // The admin role has no member/billing data access (see auth.js's
+    // STAFF_ROLES) and 'today' isn't in its allowed nav, so it lands on
+    // Backup instead. The door kiosk also surfaces member names on scan,
+    // so it's hidden for this role rather than just landing somewhere else.
+    document.getElementById('open-kiosk-btn').classList.toggle('hidden', state.staff.role === 'admin');
     applyBranding();
-    const startRoute = location.hash.replace('#', '') || 'today';
+    const startRoute = location.hash.replace('#', '') || defaultRouteFor(state.staff.role);
     go(startRoute);
   }
 
@@ -268,6 +299,23 @@
     try {
       state.staff = await api('/staff/login', { method: 'POST', body: { email, password } });
       if (state.staff.role === 'kiosk') { showKioskLocked(); } else { showApp(); }
+    } catch (err) {
+      errBox.textContent = err.message;
+      errBox.classList.remove('hidden');
+    }
+  });
+
+  document.getElementById('setup-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('setup-name').value;
+    const email = document.getElementById('setup-email').value;
+    const password = document.getElementById('setup-password').value;
+    const errBox = document.getElementById('setup-error');
+    errBox.classList.add('hidden');
+    const btn = e.target.querySelector('button[type=submit]');
+    try {
+      state.staff = await withBusy(btn, () => api('/setup/create-owner', { method: 'POST', body: { name, email, password } }));
+      showApp();
     } catch (err) {
       errBox.textContent = err.message;
       errBox.classList.remove('hidden');
@@ -1574,7 +1622,7 @@
 
   function openStaffModal(staffId) {
     const editing = staffId ? (state.staffCache || []).find((s) => s.id === staffId) : null;
-    const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff'], ['kiosk', 'Kiosk (door only)']];
+    const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff'], ['kiosk', 'Kiosk (door only)'], ['admin', 'Admin (system only)']];
     modalRoot.innerHTML = '';
     const overlay = el(`<div class="modal-overlay" id="staff-overlay"><div class="modal modal-sm">
       <div class="modal-header"><div><h2>${editing ? 'Edit staff' : 'Add staff'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>

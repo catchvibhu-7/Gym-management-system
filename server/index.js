@@ -29,6 +29,7 @@ app.use('/member', express.static(path.join(__dirname, '..', 'public', 'member')
 
 app.use('/api/payments', paymentsRoutes.router);
 app.use('/api/staff', require('./routes/staffAuth'));
+app.use('/api/setup', require('./routes/setup'));
 app.use('/api/member-auth', require('./routes/memberAuth'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/members', require('./routes/members'));
