@@ -114,14 +114,15 @@ router.post('/day-pass-types/:id/reactivate', requireStaff('owner', 'manager'), 
 });
 
 router.post('/day-passes', (req, res) => {
-  const { name, phone, typeId } = req.body || {};
+  const { name, phone, typeId, paymentMethod, gatewayPaymentId } = req.body || {};
   if (!name || !typeId) return res.status(400).json({ error: 'Name and pass type required' });
+  if (!paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
   const type = db.prepare('SELECT * FROM day_pass_types WHERE id = ?').get(typeId);
   if (!type) return res.status(404).json({ error: 'Pass type not found' });
   const info = db.prepare(
-    `INSERT INTO day_passes (name, phone, type_id, amount_cents, remaining_visits, qr_code, sold_by_staff_id, valid_date)
-     VALUES (?,?,?,?,?,?,?,?)`
-  ).run(name, phone || null, type.id, type.price_cents, type.visits, newCode('DP'), req.staff.id, todayISO());
+    `INSERT INTO day_passes (name, phone, type_id, amount_cents, remaining_visits, qr_code, sold_by_staff_id, valid_date, payment_method, gateway_payment_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
+  ).run(name, phone || null, type.id, type.price_cents, type.visits, newCode('DP'), req.staff.id, todayISO(), paymentMethod, gatewayPaymentId || null);
   res.status(201).json({ id: info.lastInsertRowid, qrCode: db.prepare('SELECT qr_code FROM day_passes WHERE id=?').get(info.lastInsertRowid).qr_code });
 });
 

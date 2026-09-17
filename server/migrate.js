@@ -71,6 +71,11 @@ function runMigrations(db) {
   ensureColumn(db, 'members', 'fob_fee_paid', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'members', 'pre_freeze_access_method', 'TEXT');
   ensureColumn(db, 'day_pass_types', 'active', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'staff', 'staff_type', 'TEXT');
+  ensureColumn(db, 'staff', 'pt_rate_cents', 'INTEGER');
+  ensureColumn(db, 'day_passes', 'payment_method', 'TEXT');
+  ensureColumn(db, 'day_passes', 'gateway_order_id', 'TEXT');
+  ensureColumn(db, 'day_passes', 'gateway_payment_id', 'TEXT');
 
   const hadPrimaryChannel = hasColumn(db, 'automations', 'primary_channel');
   ensureColumn(db, 'automations', 'primary_channel', "TEXT NOT NULL DEFAULT 'SMS'");

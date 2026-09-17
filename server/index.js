@@ -46,6 +46,9 @@ app.use('/api/settings', require('./routes/settings'));
 app.use('/api/system', require('./routes/system'));
 app.use('/api/backup', require('./routes/backup'));
 app.use('/api/kiosk', require('./routes/kiosk'));
+app.use('/api/facilities', require('./routes/facilities'));
+app.use('/api/staff-attendance', require('./routes/staffAttendance'));
+app.use('/api/pt-sessions', require('./routes/ptSessions'));
 
 app.get('/', (req, res) => res.redirect('/console/'));
 

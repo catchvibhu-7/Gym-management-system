@@ -63,35 +63,34 @@ router.get('/invoices', (req, res) => {
   res.json(page ? { items, total } : items);
 });
 
-router.post('/invoices/:id/retry', (req, res) => {
-  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+router.get('/invoices/:id', (req, res) => {
+  const invoice = db.prepare(
+    `SELECT i.*, m.name member_name, p.name plan_name FROM invoices i
+     JOIN members m ON m.id = i.member_id
+     LEFT JOIN memberships mo ON mo.id = i.membership_id
+     LEFT JOIN plans p ON p.id = mo.plan_id
+     WHERE i.id = ?`
+  ).get(req.params.id);
   if (!invoice) return res.status(404).json({ error: 'Not found' });
-  // No real card processor is wired up - this simulates a retry so the
-  // dunning workflow is fully usable end to end without one.
-  const succeeds = Math.random() < 0.6;
-  db.prepare(
-    `UPDATE invoices SET status = ?, attempted_at = datetime('now'), paid_at = ?, retry_count = retry_count + 1 WHERE id = ?`
-  ).run(succeeds ? 'paid' : 'failed', succeeds ? new Date().toISOString() : null, invoice.id);
-  if (succeeds) {
-    db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
-  }
-  res.json({ ok: true, succeeded: succeeds });
+  res.json({
+    id: invoice.id, memberName: invoice.member_name, plan: invoice.plan_name || '—',
+    amountCents: invoice.amount_cents, status: invoice.status,
+  });
 });
 
-router.post('/invoices/retry-all', (req, res) => {
-  const failed = db.prepare(`SELECT * FROM invoices WHERE status = 'failed'`).all();
-  let recovered = 0;
-  for (const invoice of failed) {
-    const succeeds = Math.random() < 0.6;
-    db.prepare(
-      `UPDATE invoices SET status = ?, attempted_at = datetime('now'), paid_at = ?, retry_count = retry_count + 1 WHERE id = ?`
-    ).run(succeeds ? 'paid' : 'failed', succeeds ? new Date().toISOString() : null, invoice.id);
-    if (succeeds) {
-      recovered++;
-      db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
-    }
-  }
-  res.json({ ok: true, attempted: failed.length, recovered });
+// Settling a failed/due invoice is a real payment now, not a simulated
+// coin-flip retry - the desk picks cash (settled immediately here) or
+// online (the existing invoice-based Razorpay order/verify routes handle
+// that, then flip status to 'paid' themselves once the signature checks out).
+router.post('/invoices/:id/settle-cash', (req, res) => {
+  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+  if (!invoice) return res.status(404).json({ error: 'Not found' });
+  if (invoice.status === 'paid') return res.status(409).json({ error: 'Already paid.' });
+  db.prepare(
+    `UPDATE invoices SET status = 'paid', attempted_at = datetime('now'), paid_at = datetime('now'), payment_method = 'cash', retry_count = retry_count + 1 WHERE id = ?`
+  ).run(invoice.id);
+  db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
+  res.json({ ok: true });
 });
 
 module.exports = router;

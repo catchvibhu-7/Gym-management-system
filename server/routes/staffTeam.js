@@ -38,12 +38,15 @@ router.get('/on-floor', (req, res) => {
 // ---- Staff management (owner/manager only) ----
 
 router.get('/admin', requireStaff('owner', 'manager'), (req, res) => {
-  const rows = db.prepare('SELECT id, name, email, phone, role, access, active FROM staff ORDER BY active DESC, role, name').all();
-  res.json(rows.map((s) => ({ ...s, initials: initialsOf(s.name), roleLabel: ROLE_LABEL[s.role] })));
+  const rows = db.prepare('SELECT id, name, email, phone, role, access, active, staff_type, pt_rate_cents FROM staff ORDER BY active DESC, role, name').all();
+  res.json(rows.map((s) => ({
+    ...s, initials: initialsOf(s.name), roleLabel: ROLE_LABEL[s.role],
+    staffType: s.staff_type, ptRateCents: s.pt_rate_cents,
+  })));
 });
 
 router.post('/', requireStaff('owner', 'manager'), (req, res) => {
-  const { name, email, phone, role, access = 'limited', password } = req.body || {};
+  const { name, email, phone, role, access = 'limited', password, staffType, ptRateCents } = req.body || {};
   if (!name || !email || !role || !password) {
     return res.status(400).json({ error: 'Name, email, role and password are required' });
   }
@@ -53,22 +56,28 @@ router.post('/', requireStaff('owner', 'manager'), (req, res) => {
   if (existing) return res.status(409).json({ error: 'A staff account with this email already exists' });
 
   const info = db.prepare(
-    `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,?)`
-  ).run(name, role, email.trim().toLowerCase(), phone || null, hashPassword(password), access === 'full' ? 'full' : 'limited');
+    `INSERT INTO staff (name, role, email, phone, password_hash, access, staff_type, pt_rate_cents) VALUES (?,?,?,?,?,?,?,?)`
+  ).run(
+    name, role, email.trim().toLowerCase(), phone || null, hashPassword(password), access === 'full' ? 'full' : 'limited',
+    staffType && staffType.trim() ? staffType.trim() : null, ptRateCents != null && ptRateCents !== '' ? Number(ptRateCents) : null
+  );
   res.status(201).json({ id: info.lastInsertRowid, name, role });
 });
 
 router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
   const staffRow = db.prepare('SELECT * FROM staff WHERE id = ?').get(req.params.id);
   if (!staffRow) return res.status(404).json({ error: 'Not found' });
-  const { name, email, phone, role, access } = req.body || {};
+  const { name, email, phone, role, access, staffType, ptRateCents } = req.body || {};
   if (role && !VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
   const nextEmail = email ? email.trim().toLowerCase() : staffRow.email;
+  const nextStaffType = staffType !== undefined ? (staffType && staffType.trim() ? staffType.trim() : null) : staffRow.staff_type;
+  const nextPtRate = ptRateCents !== undefined ? (ptRateCents !== '' && ptRateCents !== null ? Number(ptRateCents) : null) : staffRow.pt_rate_cents;
   db.prepare(
-    `UPDATE staff SET name = ?, email = ?, phone = ?, role = ?, access = ? WHERE id = ?`
+    `UPDATE staff SET name = ?, email = ?, phone = ?, role = ?, access = ?, staff_type = ?, pt_rate_cents = ? WHERE id = ?`
   ).run(
     name ?? staffRow.name, nextEmail,
-    phone ?? staffRow.phone, role ?? staffRow.role, access ?? staffRow.access, staffRow.id
+    phone ?? staffRow.phone, role ?? staffRow.role, access ?? staffRow.access,
+    nextStaffType, nextPtRate, staffRow.id
   );
   res.json({ ok: true });
 });

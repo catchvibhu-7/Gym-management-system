@@ -120,10 +120,13 @@
     { group: 'Money', items: [
       { id: 'billing', label: 'Billing', roles: ['owner', 'manager', 'desk'] },
       { id: 'plans', label: 'Plans & passes', roles: ['owner', 'manager', 'desk'] },
+      { id: 'pt-sessions', label: 'PT sessions', roles: ['owner', 'manager', 'desk', 'coach'] },
     ] },
     { group: 'Operations', items: [
       { id: 'classes', label: 'Classes', roles: DATA_STAFF_ROLES },
+      { id: 'facilities', label: 'Facilities', roles: ['owner', 'manager'] },
       { id: 'team', label: 'Team', roles: ['owner', 'manager'] },
+      { id: 'staff-attendance', label: 'Staff attendance', roles: DATA_STAFF_ROLES },
     ] },
     { group: 'Insights', items: [
       { id: 'reports', label: 'Reports', roles: ['owner', 'manager'] },
@@ -140,7 +143,9 @@
   const PAGE_META = {
     today: 'Desk view', members: 'Roster, plans and status', attendance: 'QR codes and fob reads at the turnstile',
     billing: 'Charges, failures and recovery', plans: 'Pricing, day passes and plan moves',
-    classes: 'Schedule and waitlists', team: 'Coaches, desk staff and access levels',
+    'pt-sessions': 'Book and track personal training',
+    classes: 'Schedule and waitlists', facilities: 'Rooms and bookable areas',
+    team: 'Coaches, desk staff and access levels', 'staff-attendance': 'Staff clock-in and clock-out',
     reports: 'Revenue, retention and capacity', reminders: 'Automatic texts and emails',
     'settings-general': 'Gym profile, currency and GST', 'settings-payments': 'Card/UPI processor configuration',
     'settings-notifications': 'SMS and email provider configuration', 'settings-backup': 'Download or restore your data',
@@ -367,6 +372,7 @@
       'settings-general': pageSettingsGeneral, 'settings-payments': pageSettingsPayments,
       'settings-notifications': pageSettingsNotifications, 'settings-backup': pageSettingsBackup,
       'settings-passes': pageSettingsPasses,
+      'pt-sessions': pagePtSessions, facilities: pageFacilities, 'staff-attendance': pageStaffAttendance,
     };
     (fns[route] || pageToday)().catch((err) => {
       pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
@@ -650,10 +656,9 @@
     pageRoot.appendChild(table);
 
     if (failedCount) {
-      pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-dark);color:#fff;display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:24px;align-items:center">
-        <div><h2 style="font-size:18px;color:#fff;margin-bottom:8px">Recover ${failedCount} failed payment${failedCount === 1 ? '' : 's'}</h2>
-          <p style="margin:0;font-size:13px;color:#cfe8de;max-width:60ch;line-height:1.5">Retrying charges the same card on file. A member is set back to active automatically the moment their retry succeeds.</p></div>
-        <button class="btn" style="background:#fff;border:none;color:var(--accent-dark);font-weight:700;padding:11px" data-action="retry-all">Retry all now</button>
+      pageRoot.appendChild(el(`<section class="card card-pad" style="background:var(--accent-dark);color:#fff">
+        <h2 style="font-size:18px;color:#fff;margin-bottom:8px">${failedCount} failed payment${failedCount === 1 ? '' : 's'} to recover</h2>
+        <p style="margin:0;font-size:13px;color:#cfe8de;max-width:60ch;line-height:1.5">Click "Settle" on a failed invoice below to take payment - cash at the counter, or online through your connected provider if one's active. A member is set back to active the moment it's paid.</p>
       </section>`));
     }
 
@@ -675,7 +680,7 @@
           <td style="font-weight:600">${esc(i.name)}</td><td style="font-size:12.5px">${esc(i.plan)}</td>
           <td class="mono" style="font-weight:600">${esc(i.amount)}</td><td class="mono" style="font-size:12px;color:var(--muted)">${esc(i.date)}</td>
           <td><span class="chip" style="${esc(i.chipStyle)}">${esc(i.status)}</span>
-            ${i.status === 'failed' ? `<button class="btn-outline btn-sm" style="margin-left:8px" data-action="retry-invoice" data-id="${i.id}">Retry</button>` : ''}</td>
+            ${i.status === 'failed' ? `<button class="btn-outline btn-sm" style="margin-left:8px" data-action="settle-invoice" data-id="${i.id}">Settle</button>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="5" class="empty-state">No invoices this month yet.</td></tr>`;
 
       const pager = document.getElementById('billing-pagination');
@@ -850,6 +855,207 @@
             <span style="font-size:12.5px;font-weight:600">${esc(o.name)}</span></div>`).join('') : '<span style="font-size:12.5px;color:var(--muted)">Nobody checked in right now.</span>'}
       </div>
     </section>`));
+  }
+
+  // ---------- Facilities (rooms/areas) ----------
+  async function pageFacilities() {
+    const canManage = ['owner', 'manager'].includes(state.staff.role);
+    setTopActions(canManage ? [el(`<button class="btn btn-primary" data-action="open-facility-modal">Add facility</button>`)] : []);
+    const facilities = await api('/facilities?all=1');
+    state.facilitiesCache = facilities;
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+      <div class="card-header"><h2>Rooms &amp; bookable areas</h2><span class="count">${facilities.length}</span></div>
+      <table class="data-table"><thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+      <tbody>${facilities.length ? facilities.map((f) => `<tr style="${f.active ? '' : 'opacity:.55'}">
+          <td style="font-weight:600">${esc(f.name)}</td>
+          <td><span class="chip" style="${f.active ? 'background:var(--accent-soft);color:var(--accent-dark)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${f.active ? 'Active' : 'Inactive'}</span></td>
+          <td style="white-space:nowrap">
+            ${canManage ? `<button class="btn-outline btn-sm" data-action="edit-facility" data-id="${f.id}">Edit</button>
+            <button class="btn-outline btn-sm" data-action="${f.active ? 'deactivate-facility' : 'reactivate-facility'}" data-id="${f.id}">${f.active ? 'Deactivate' : 'Reactivate'}</button>` : ''}
+          </td>
+        </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No facilities added yet. Use these to assign a room to a class or PT session.</td></tr>`}</tbody></table>
+    </section>`));
+  }
+
+  function openFacilityModal(id) {
+    const editing = id ? (state.facilitiesCache || []).find((f) => f.id === id) : null;
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="facility-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${editing ? 'Edit facility' : 'Add facility'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field">Name<input id="facility-name" value="${esc(editing?.name || '')}" placeholder="e.g. Studio A"></label>
+        <div id="facility-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-facility" data-id="${id || ''}">${editing ? 'Save changes' : 'Add facility'}</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitFacilityModal(id) {
+    const nameEl = document.getElementById('facility-name');
+    const name = nameEl.value.trim();
+    const errBox = document.getElementById('facility-error');
+    if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
+    const btn = document.querySelector('[data-action="submit-facility"]');
+    try {
+      await withBusy(btn, () => api(id ? `/facilities/${id}` : '/facilities', { method: id ? 'PATCH' : 'POST', body: { name } }));
+      closeModal();
+      toast(id ? 'Facility updated.' : 'Facility added.', 'success');
+      renderPage('facilities');
+    } catch (err) { errBox.textContent = err.message; errBox.classList.remove('hidden'); }
+  }
+
+  async function toggleFacilityActive(id, activate, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/facilities/${id}/${activate ? 'reactivate' : 'deactivate'}`, { method: 'POST' }));
+      toast(activate ? 'Facility reactivated.' : 'Facility deactivated.', 'success');
+      renderPage('facilities');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  // ---------- Staff attendance ----------
+  async function pageStaffAttendance() {
+    const canManage = ['owner', 'manager'].includes(state.staff.role);
+    const [status, log] = await Promise.all([
+      api('/staff-attendance/status'),
+      canManage ? api('/staff-attendance') : Promise.resolve([]),
+    ]);
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Your shift</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted)">${status.clockedIn ? `Clocked in since ${new Date(status.since).toLocaleTimeString()}` : 'Not clocked in.'}</p>
+      <button class="btn ${status.clockedIn ? '' : 'btn-primary'}" data-action="${status.clockedIn ? 'staff-clock-out' : 'staff-clock-in'}">${status.clockedIn ? 'Clock out' : 'Clock in'}</button>
+    </section>`));
+    if (canManage) {
+      pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+        <div class="card-header"><h2>Recent shifts</h2><span class="count">${log.length}</span></div>
+        <table class="data-table"><thead><tr><th>Staff</th><th>Clocked in</th><th>Clocked out</th></tr></thead>
+        <tbody>${log.length ? log.map((l) => `<tr>
+            <td><div style="display:flex;align-items:center;gap:10px"><div class="avatar" style="width:26px;height:26px;font-size:11px">${esc(l.initials)}</div>${esc(l.name)}</div></td>
+            <td class="mono" style="font-size:12px">${new Date(l.clockedInAt).toLocaleString()}</td>
+            <td class="mono" style="font-size:12px">${l.clockedOutAt ? new Date(l.clockedOutAt).toLocaleString() : '<span style="color:var(--accent-dark);font-weight:700">On shift</span>'}</td>
+          </tr>`).join('') : `<tr><td colspan="3" class="empty-state">No shifts recorded yet.</td></tr>`}</tbody></table>
+      </section>`));
+    }
+  }
+
+  async function staffClockAction(action, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/staff-attendance/${action}`, { method: 'POST' }));
+      toast(action === 'clock-in' ? 'Clocked in.' : 'Clocked out.', 'success');
+      renderPage('staff-attendance');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  // ---------- PT sessions ----------
+  async function pagePtSessions() {
+    setTopActions([el(`<button class="btn btn-primary" data-action="open-pt-session-modal">Book PT session</button>`)]);
+    const sessions = await api('/pt-sessions');
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+      <div class="card-header"><h2>Personal training sessions</h2><span class="count">${sessions.length}</span></div>
+      <table class="data-table"><thead><tr><th>Member</th><th>Trainer</th><th>Room</th><th>When</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+      <tbody>${sessions.length ? sessions.map((s) => `<tr>
+          <td style="font-weight:600">${esc(s.memberName)}</td>
+          <td>${esc(s.trainerName)}</td>
+          <td style="font-size:12.5px;color:var(--muted)">${esc(s.facilityName || '—')}</td>
+          <td class="mono" style="font-size:12px">${new Date(s.scheduledAt).toLocaleString()}</td>
+          <td class="mono" style="font-size:12px">${esc(formatMoney(s.priceCents))} · ${esc(s.paymentMethod || '—')}</td>
+          <td><span class="chip" style="${s.status === 'completed' ? 'background:var(--accent-soft);color:var(--accent-dark)' : s.status === 'cancelled' ? 'background:var(--danger-bg);color:var(--danger-fg)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${esc(s.status)}</span></td>
+          <td style="white-space:nowrap">${s.status === 'booked' ? `
+            <button class="btn-outline btn-sm" data-action="complete-pt-session" data-id="${s.id}">Mark done</button>
+            <button class="btn-outline btn-sm" data-action="cancel-pt-session" data-id="${s.id}">Cancel</button>` : ''}</td>
+        </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No PT sessions booked yet.</td></tr>`}</tbody></table>
+    </section>`));
+  }
+
+  async function openPtSessionModal() {
+    const [trainers, members] = await Promise.all([api('/pt-sessions/trainers'), Promise.resolve(null)]);
+    modalRoot.innerHTML = '';
+    if (!trainers.length) {
+      toast('No trainers are set up for PT sessions yet - set a rate for a coach in Team.', 'error');
+      return;
+    }
+    const facilities = state.facilitiesCache || await api('/facilities');
+    const overlay = el(`<div class="modal-overlay" id="pt-session-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Book PT session</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Member (search name or phone)
+          <input id="pt-member-search" placeholder="Start typing...">
+          <div id="pt-member-results" style="margin-top:6px"></div>
+        </label>
+        <div id="pt-member-selected" style="display:none;margin-bottom:12px;padding:10px 12px;background:var(--bg);border-radius:8px;font-size:13px;font-weight:600"></div>
+        <label class="field" style="margin-bottom:12px">Trainer
+          <select id="pt-trainer">${trainers.map((t) => `<option value="${t.id}" data-rate="${t.rateCents}" data-name="${esc(t.name)}">${esc(t.name)}${t.staffType ? ` — ${esc(t.staffType)}` : ''} (${esc(formatMoney(t.rateCents))})</option>`).join('')}</select>
+        </label>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Room (optional)
+            <select id="pt-facility"><option value="">None</option>${facilities.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select>
+          </label>
+          <label class="field">Date &amp; time
+            <input id="pt-scheduled-at" type="datetime-local">
+          </label>
+        </div>
+        <div id="pt-session-error" class="login-error hidden"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-pt-session">Continue to payment</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+
+    let selectedMemberId = null;
+    const searchInput = document.getElementById('pt-member-search');
+    let searchTimer;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = searchInput.value.trim();
+        const results = document.getElementById('pt-member-results');
+        if (!q) { results.innerHTML = ''; return; }
+        const rows = await api(`/members?q=${encodeURIComponent(q)}`);
+        results.innerHTML = rows.slice(0, 5).map((m) => `<button class="pick-btn" style="margin-bottom:4px" data-pt-member="${m.id}" data-pt-name="${esc(m.name)}">${esc(m.name)}</button>`).join('') || '<div style="font-size:12px;color:var(--muted)">No match.</div>';
+        results.querySelectorAll('[data-pt-member]').forEach((b) => b.addEventListener('mousedown', () => {
+          selectedMemberId = Number(b.dataset.ptMember);
+          document.getElementById('pt-member-selected').style.display = 'block';
+          document.getElementById('pt-member-selected').textContent = `Selected: ${b.dataset.ptName}`;
+          searchInput.value = ''; results.innerHTML = '';
+        }));
+      }, 250);
+    });
+
+    document.querySelector('[data-action="submit-pt-session"]').addEventListener('click', async () => {
+      const errBox = document.getElementById('pt-session-error');
+      const scheduledAt = document.getElementById('pt-scheduled-at').value;
+      if (!selectedMemberId) { errBox.textContent = 'Pick a member first.'; errBox.classList.remove('hidden'); return; }
+      if (!scheduledAt) { errBox.textContent = 'Pick a date and time.'; errBox.classList.remove('hidden'); return; }
+      const trainerSelect = document.getElementById('pt-trainer');
+      const trainerId = Number(trainerSelect.value);
+      const rateCents = Number(trainerSelect.selectedOptions[0].dataset.rate);
+      const facilityId = document.getElementById('pt-facility').value || null;
+      const trainerName = trainerSelect.selectedOptions[0].dataset.name;
+      closeModal();
+      openCheckoutModal({
+        title: 'PT session payment',
+        lineItems: [{ label: `Session with ${trainerName}`, amountCents: rateCents }],
+        totalCents: rateCents,
+        onConfirm: async (paymentMethod, gatewayPaymentId) => {
+          await api('/pt-sessions', { method: 'POST', body: {
+            memberId: selectedMemberId, trainerId, facilityId, scheduledAt: new Date(scheduledAt).toISOString(),
+            paymentMethod, gatewayPaymentId,
+          } });
+          toast('PT session booked.', 'success');
+          renderPage('pt-sessions');
+        },
+      });
+    });
+  }
+
+  async function ptSessionAction(action, id, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/pt-sessions/${id}/${action}`, { method: 'POST' }));
+      toast(action === 'complete' ? 'Marked done.' : 'Session cancelled.', 'success');
+      renderPage('pt-sessions');
+    } catch (err) { toast(err.message, 'error'); }
   }
 
   // ---------- Reports ----------
@@ -1280,6 +1486,97 @@
   const modalRoot = document.getElementById('modal-root');
   function closeModal() { modalRoot.innerHTML = ''; }
 
+  function formatMoney(cents) {
+    const symbol = (settingsCache && settingsCache.currency_symbol) || '$';
+    return `${symbol}${(cents / 100).toFixed(2).replace(/\.00$/, '')}`;
+  }
+
+  // ---------- Shared checkout: itemized bill + cash/online ----------
+  // Used by every flow that takes money at the desk (new member signup,
+  // day pass sale, PT session booking) plus settling a failed/due invoice
+  // from Billing. onConfirm(paymentMethod, gatewayPaymentId) does the
+  // actual create/settle call for that specific flow - this modal only
+  // handles showing the itemized total and getting a payment method.
+  async function openCheckoutModal({ title, lineItems, totalCents, onConfirm, invoiceId }) {
+    const payConfig = await api('/payments/config').catch(() => ({ provider: 'none' }));
+    const razorpayReady = payConfig.provider === 'razorpay' && payConfig.ready && typeof window.Razorpay === 'function';
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="checkout-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${esc(title)}</h2><p>Itemised bill</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+          ${lineItems.map((li) => `<div class="calc-row"><span style="color:var(--muted)">${esc(li.label)}</span><span>${esc(formatMoney(li.amountCents))}</span></div>`).join('')}
+          <div class="calc-row" style="border-top:1px solid var(--border-soft);padding-top:10px;margin-top:2px;font-weight:700;font-size:15px"><span>Total</span><span>${esc(formatMoney(totalCents))}</span></div>
+        </div>
+        <div id="checkout-error" class="login-error hidden" style="margin-bottom:12px"></div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button class="btn btn-primary" style="width:100%" data-action="checkout-cash">Pay at counter (cash)</button>
+          ${razorpayReady
+            ? `<button class="btn" style="width:100%" data-action="checkout-online">Pay online (Razorpay)</button>`
+            : `<div style="font-size:12px;color:var(--muted);text-align:center;padding:4px 0">Online payment isn't set up yet (Settings &gt; Payments).</div>`}
+        </div>
+      </div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+
+    const errBox = document.getElementById('checkout-error');
+    const showError = (msg) => { errBox.textContent = msg; errBox.classList.remove('hidden'); };
+
+    document.querySelector('[data-action="checkout-cash"]').addEventListener('click', async (e) => {
+      try {
+        await withBusy(e.currentTarget, () => onConfirm('cash', null));
+        closeModal();
+      } catch (err) { showError(err.message); }
+    });
+
+    const onlineBtn = document.querySelector('[data-action="checkout-online"]');
+    if (onlineBtn) {
+      onlineBtn.addEventListener('click', async () => {
+        errBox.classList.add('hidden');
+        try {
+          await withBusy(onlineBtn, async () => {
+            // A pre-existing invoice (Billing's "Settle") re-uses the
+            // invoice-based order/verify pair, which stamps that invoice
+            // paid itself once the signature checks out. Everything else
+            // (a new member, day pass, PT session) doesn't have a row yet,
+            // so it uses the ad-hoc pair and only creates that row here,
+            // in onConfirm, once payment is verified.
+            const order = invoiceId
+              ? await api('/payments/razorpay/order', { method: 'POST', body: { invoiceId } })
+              : await api('/payments/razorpay/order-adhoc', { method: 'POST', body: { amountCents: totalCents } });
+            const rzpResponse = await new Promise((resolve, reject) => {
+              const rzp = new window.Razorpay({
+                key: order.keyId, amount: order.amount, currency: order.currency, order_id: order.orderId,
+                name: (settingsCache && settingsCache.gym_name) || 'Gym', theme: { color: '#137a5f' },
+                handler: (resp) => resolve(resp),
+                modal: { ondismiss: () => reject(new Error('Payment cancelled.')) },
+              });
+              rzp.on('payment.failed', () => reject(new Error('Payment failed.')));
+              rzp.open();
+            });
+            if (invoiceId) {
+              await api('/payments/razorpay/verify', { method: 'POST', body: {
+                invoiceId,
+                razorpay_order_id: rzpResponse.razorpay_order_id,
+                razorpay_payment_id: rzpResponse.razorpay_payment_id,
+                razorpay_signature: rzpResponse.razorpay_signature,
+              } });
+              await onConfirm('razorpay', rzpResponse.razorpay_payment_id);
+            } else {
+              const verify = await api('/payments/razorpay/verify-adhoc', { method: 'POST', body: {
+                razorpay_order_id: rzpResponse.razorpay_order_id,
+                razorpay_payment_id: rzpResponse.razorpay_payment_id,
+                razorpay_signature: rzpResponse.razorpay_signature,
+              } });
+              await onConfirm('razorpay', verify.paymentId);
+            }
+          });
+          closeModal();
+        } catch (err) { showError(err.message); }
+      });
+    }
+  }
+
   function openWizard() {
     state.wizard = { step: 1, data: { name: '', phone: '', email: '', emergencyName: '', emergencyPhone: '', planId: null, accessMethod: 'qr', isTrial: false }, plans: [], trialDays: 3 };
     Promise.all([api('/plans'), api('/settings')]).then(([plans, settings]) => {
@@ -1388,21 +1685,54 @@
 
   async function wizardSubmit() {
     const w = state.wizard;
-    const btn = document.querySelector('[data-action="wizard-submit"]');
     const hint = document.getElementById('wizard-hint');
-    try {
-      await withBusy(btn, () => api('/members', { method: 'POST', body: {
-        name: w.data.name, phone: w.data.phone, email: w.data.email || null,
-        emergencyName: w.data.emergencyName || null, planId: w.data.planId, accessMethod: w.data.accessMethod,
-        isTrial: w.data.isTrial,
-      } }));
-      w.step = 4;
-      renderWizard();
-      toast(`${w.data.name} added.`, 'success');
-      if (state.route === 'members' || state.route === 'today') renderPage(state.route);
-    } catch (err) {
-      if (hint) hint.textContent = err.message;
+
+    // A trial member is never charged, so there's nothing to check out -
+    // create it directly the same way it always has.
+    if (w.data.isTrial) {
+      const btn = document.querySelector('[data-action="wizard-submit"]');
+      try {
+        await withBusy(btn, () => api('/members', { method: 'POST', body: {
+          name: w.data.name, phone: w.data.phone, email: w.data.email || null,
+          emergencyName: w.data.emergencyName || null, planId: null, accessMethod: w.data.accessMethod,
+          isTrial: true,
+        } }));
+        w.step = 4;
+        renderWizard();
+        toast(`${w.data.name} added.`, 'success');
+        if (state.route === 'members' || state.route === 'today') renderPage(state.route);
+      } catch (err) {
+        if (hint) hint.textContent = err.message;
+      }
+      return;
     }
+
+    const plan = w.plans.find((p) => p.id === w.data.planId);
+    if (!plan) { if (hint) hint.textContent = 'Pick a plan first.'; return; }
+    const JOINING_FEE_CENTS = 2500;
+    const gstEnabled = settingsCache && settingsCache.gst_enabled === '1';
+    const gstPct = gstEnabled ? parseFloat(settingsCache.gst_percentage) || 0 : 0;
+    const subtotal = plan.priceCents + JOINING_FEE_CENTS;
+    const gstCents = gstEnabled ? Math.round(subtotal * (gstPct / 100)) : 0;
+    const lineItems = [
+      { label: `${plan.name} plan`, amountCents: plan.priceCents },
+      { label: 'Joining fee', amountCents: JOINING_FEE_CENTS },
+    ];
+    if (gstEnabled) lineItems.push({ label: `GST (${gstPct}%)`, amountCents: gstCents });
+
+    openCheckoutModal({
+      title: 'New member payment',
+      lineItems, totalCents: subtotal + gstCents,
+      onConfirm: async (paymentMethod, gatewayPaymentId) => {
+        await api('/members', { method: 'POST', body: {
+          name: w.data.name, phone: w.data.phone, email: w.data.email || null,
+          emergencyName: w.data.emergencyName || null, planId: w.data.planId, accessMethod: w.data.accessMethod,
+          isTrial: false, paymentMethod, gatewayPaymentId,
+        } });
+        toast(`${w.data.name} added.`, 'success');
+        if (state.route === 'members' || state.route === 'today') renderPage(state.route);
+      },
+    });
   }
 
   function openAccessModal() {
@@ -1679,6 +2009,10 @@
             </select>
           </label>
         </div>
+        <div class="grid-2" style="margin-bottom:12px">
+          <label class="field">Staff type (optional)<input id="staff-type" value="${esc(editing?.staffType || '')}" placeholder="e.g. Personal Trainer"></label>
+          <label class="field">PT session rate (optional)<input id="staff-pt-rate" type="number" min="0" step="0.01" value="${editing?.ptRateCents != null ? (editing.ptRateCents / 100).toFixed(2) : ''}" placeholder="Leave blank if not a trainer"></label>
+        </div>
         ${editing ? '' : `<label class="field">Temporary password<input id="staff-password" type="password" placeholder="At least 8 characters"></label>`}
         <div id="staff-error" class="login-error hidden" style="margin-top:12px"></div>
       </div>
@@ -1698,7 +2032,13 @@
     const errBox = document.getElementById('staff-error');
     if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
     if (!email) { markInvalid(emailEl, 'Email is required.'); return; }
-    const body = { name, email, phone: phone || null, role, access };
+    const staffType = document.getElementById('staff-type').value.trim();
+    const ptRateInput = document.getElementById('staff-pt-rate').value;
+    const body = {
+      name, email, phone: phone || null, role, access,
+      staffType: staffType || null,
+      ptRateCents: ptRateInput ? Math.round(parseFloat(ptRateInput) * 100) : null,
+    };
     if (!staffId) {
       const pwEl = document.getElementById('staff-password');
       if (!pwEl.value || pwEl.value.length < 8) { markInvalid(pwEl, 'At least 8 characters.'); return; }
@@ -1866,20 +2206,24 @@
         b.classList.add('selected');
       }));
       const submitBtn = overlay.querySelector('[data-action="submit-day-pass"]');
-      submitBtn.addEventListener('click', async () => {
+      submitBtn.addEventListener('click', () => {
         const nameEl = document.getElementById('dp-name');
         const name = nameEl.value.trim();
         const phone = document.getElementById('dp-phone').value.trim();
-        const errBox = document.getElementById('dp-error');
         if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
-        try {
-          await withBusy(submitBtn, () => api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType } }));
-          closeModal();
-          toast(`Day pass sold to ${name}.`, 'success');
-          if (state.route === 'plans') renderPage('plans');
-        } catch (err) {
-          errBox.textContent = err.message; errBox.classList.remove('hidden');
-        }
+        const type = types.find((t) => t.id === selectedType);
+        if (!type) { markInvalid(nameEl, 'Pick a pass type.'); return; }
+        closeModal();
+        openCheckoutModal({
+          title: 'Day pass payment',
+          lineItems: [{ label: type.name, amountCents: type.priceCents }],
+          totalCents: type.priceCents,
+          onConfirm: async (paymentMethod, gatewayPaymentId) => {
+            await api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType, paymentMethod, gatewayPaymentId } });
+            toast(`Day pass sold to ${name}.`, 'success');
+            if (state.route === 'plans') renderPage('plans');
+          },
+        });
       });
     });
   }
@@ -2063,7 +2407,7 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
-    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay'];
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay', 'checkout-overlay', 'facility-overlay', 'pt-session-overlay'];
     if (!a) {
       if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;
@@ -2083,8 +2427,7 @@
     else if (action === 'freeze-member') freezeMember(Number(a.dataset.member), a);
     else if (action === 'unfreeze-member') unfreezeMember(Number(a.dataset.member), a);
     else if (action === 'send-reminder') sendReminder(Number(a.dataset.member), a);
-    else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id), a);
-    else if (action === 'retry-all') retryAll(a);
+    else if (action === 'settle-invoice') settleInvoice(Number(a.dataset.id), a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
     else if (action === 'edit-automation-channels') openAutomationChannelsModal(Number(a.dataset.id));
     else if (action === 'submit-automation-channels') submitAutomationChannels(Number(a.dataset.id));
@@ -2108,6 +2451,16 @@
     else if (action === 'submit-daypass-type') submitDayPassTypeModal(a.dataset.id ? Number(a.dataset.id) : null);
     else if (action === 'deactivate-daypass-type') deactivateDayPassType(Number(a.dataset.id), a);
     else if (action === 'reactivate-daypass-type') reactivateDayPassType(Number(a.dataset.id), a);
+    else if (action === 'open-facility-modal') openFacilityModal();
+    else if (action === 'edit-facility') openFacilityModal(Number(a.dataset.id));
+    else if (action === 'submit-facility') submitFacilityModal(a.dataset.id ? Number(a.dataset.id) : null);
+    else if (action === 'deactivate-facility') toggleFacilityActive(Number(a.dataset.id), false, a);
+    else if (action === 'reactivate-facility') toggleFacilityActive(Number(a.dataset.id), true, a);
+    else if (action === 'staff-clock-in') staffClockAction('clock-in', a);
+    else if (action === 'staff-clock-out') staffClockAction('clock-out', a);
+    else if (action === 'open-pt-session-modal') openPtSessionModal();
+    else if (action === 'complete-pt-session') ptSessionAction('complete', Number(a.dataset.id), a);
+    else if (action === 'cancel-pt-session') ptSessionAction('cancel', Number(a.dataset.id), a);
     else if (action === 'open-staff-modal') openStaffModal();
     else if (action === 'edit-staff') openStaffModal(Number(a.dataset.id));
     else if (action === 'submit-staff') submitStaffModal(a.dataset.id ? Number(a.dataset.id) : null);
@@ -2159,18 +2512,23 @@
       toast('Reminder queued.', 'success');
     } catch (err) { toast(err.message, 'error'); }
   }
-  async function retryInvoice(id, btnEl) {
+  async function settleInvoice(id, btnEl) {
     try {
-      const r = await withBusy(btnEl, () => api(`/billing/invoices/${id}/retry`, { method: 'POST' }));
-      toast(r.succeeded ? 'Payment recovered.' : 'Retry failed — still needs attention.', r.succeeded ? 'success' : 'error');
-      renderPage('billing');
-    } catch (err) { toast(err.message, 'error'); }
-  }
-  async function retryAll(btnEl) {
-    try {
-      const r = await withBusy(btnEl, () => api('/billing/invoices/retry-all', { method: 'POST' }));
-      toast(`Retried ${r.attempted}, recovered ${r.recovered}.`, r.recovered ? 'success' : 'error');
-      renderPage('billing');
+      const invoice = await withBusy(btnEl, () => api(`/billing/invoices/${id}`));
+      openCheckoutModal({
+        title: 'Settle invoice',
+        lineItems: [{ label: `${invoice.plan} — ${invoice.memberName}`, amountCents: invoice.amountCents }],
+        totalCents: invoice.amountCents,
+        invoiceId: invoice.id,
+        onConfirm: async (paymentMethod) => {
+          if (paymentMethod === 'cash') {
+            await api(`/billing/invoices/${id}/settle-cash`, { method: 'POST' });
+          }
+          // The razorpay path already marked this invoice paid via /verify.
+          toast('Invoice settled.', 'success');
+          renderPage('billing');
+        },
+      });
     } catch (err) { toast(err.message, 'error'); }
   }
   async function toggleAutomation(id) {

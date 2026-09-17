@@ -98,8 +98,12 @@ router.get('/:id', (req, res) => {
 });
 
 router.post('/', (req, res) => {
-  const { name, phone, email, emergencyName, emergencyPhone, planId, joiningFeeCents = 2500, accessMethod = 'qr', isTrial = false } = req.body || {};
+  const {
+    name, phone, email, emergencyName, emergencyPhone, planId, joiningFeeCents = 2500,
+    accessMethod = 'qr', isTrial = false, paymentMethod, gatewayPaymentId,
+  } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
+  if (!isTrial && planId && !paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
   const existing = db.prepare('SELECT id FROM members WHERE phone = ?').get(phone);
   if (existing) return res.status(409).json({ error: 'A member with this phone already exists' });
 
@@ -131,9 +135,9 @@ router.post('/', (req, res) => {
          VALUES (?,?,?,?,?, date('now'), date('now',?), 'active')`
       ).run(memberId, plan.id, plan.price_cents, plan.billing_period, joiningFeeCents, modifier).lastInsertRowid;
       db.prepare(
-        `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method)
-         VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', 'card')`
-      ).run(memberId, membershipId, gst.totalCents);
+        `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method, gateway_payment_id)
+         VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', ?, ?)`
+      ).run(memberId, membershipId, gst.totalCents, paymentMethod, gatewayPaymentId || null);
     }
   }
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);

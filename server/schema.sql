@@ -181,6 +181,39 @@ CREATE TABLE IF NOT EXISTS workout_plan_exercises (
   notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS facilities (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
+);
+
+-- A staff member's own shift clock-in/out - deliberately separate from
+-- `checkins`, which is member/day-pass floor attendance. Self-service:
+-- any logged-in staff member clocks themselves in/out.
+CREATE TABLE IF NOT EXISTS staff_attendance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  staff_id INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+  clocked_in_at TEXT NOT NULL DEFAULT (datetime('now')),
+  clocked_out_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pt_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  trainer_staff_id INTEGER NOT NULL REFERENCES staff(id),
+  facility_id INTEGER REFERENCES facilities(id),
+  scheduled_at TEXT NOT NULL,
+  price_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'booked' CHECK (status IN ('booked','completed','cancelled')),
+  payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN ('unpaid','paid')),
+  payment_method TEXT,
+  gateway_order_id TEXT,
+  gateway_payment_id TEXT,
+  paid_at TEXT,
+  created_by_staff_id INTEGER REFERENCES staff(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_checkins_member ON checkins(member_id);
 CREATE INDEX IF NOT EXISTS idx_checkins_time ON checkins(checked_in_at);
 CREATE INDEX IF NOT EXISTS idx_invoices_member ON invoices(member_id);
@@ -189,3 +222,6 @@ CREATE INDEX IF NOT EXISTS idx_memberships_member ON memberships(member_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_session ON bookings(session_id);
 CREATE INDEX IF NOT EXISTS idx_class_sessions_date ON class_sessions(session_date);
 CREATE INDEX IF NOT EXISTS idx_workout_plans_member ON workout_plans(member_id);
+CREATE INDEX IF NOT EXISTS idx_staff_attendance_staff ON staff_attendance(staff_id);
+CREATE INDEX IF NOT EXISTS idx_pt_sessions_member ON pt_sessions(member_id);
+CREATE INDEX IF NOT EXISTS idx_pt_sessions_trainer ON pt_sessions(trainer_staff_id);

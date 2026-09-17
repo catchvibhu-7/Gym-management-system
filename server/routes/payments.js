@@ -40,6 +40,40 @@ router.post('/razorpay/order', requireStaff(), async (req, res) => {
   }
 });
 
+// Ad-hoc variants for a charge that doesn't have an invoice row yet (a new
+// member's first charge, a day pass, a PT session): create the order
+// against a bare amount, verify the signature the same way, and only then
+// let the caller create the actual record with paymentMethod/gatewayPaymentId
+// attached - there's never a "pending" day pass/PT session/member sitting
+// around waiting on a payment that never completed.
+router.post('/razorpay/order-adhoc', requireStaff(), async (req, res) => {
+  const keyId = settingsStore.get('razorpay_key_id');
+  const keySecret = settingsStore.get('razorpay_key_secret');
+  if (!keyId || !keySecret) return res.status(400).json({ error: 'Razorpay is not configured in Settings > Payments yet.' });
+  const { amountCents, receipt } = req.body || {};
+  if (!amountCents || amountCents <= 0) return res.status(400).json({ error: 'A positive amount is required.' });
+
+  try {
+    const order = await razorpay.createOrder({
+      keyId, keySecret, amountCents,
+      currencyCode: settingsStore.get('currency_code') || 'INR',
+      receipt: receipt || `adhoc-${Date.now()}`,
+    });
+    res.json({ orderId: order.id, amount: order.amount, currency: order.currency, keyId });
+  } catch (err) {
+    res.status(502).json({ error: `Could not create a Razorpay order: ${err.message}` });
+  }
+});
+
+router.post('/razorpay/verify-adhoc', requireStaff(), (req, res) => {
+  const { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature } = req.body || {};
+  const keySecret = settingsStore.get('razorpay_key_secret');
+  if (!keySecret) return res.status(400).json({ error: 'Razorpay is not configured.' });
+  const valid = razorpay.verifyPaymentSignature({ orderId, paymentId, signature, keySecret });
+  if (!valid) return res.status(400).json({ error: 'Payment signature could not be verified.' });
+  res.json({ ok: true, paymentId });
+});
+
 router.post('/razorpay/verify', requireStaff(), (req, res) => {
   const { invoiceId, razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature } = req.body || {};
   const keySecret = settingsStore.get('razorpay_key_secret');
