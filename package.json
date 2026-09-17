@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^44.4.1",

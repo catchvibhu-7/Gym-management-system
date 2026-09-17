@@ -11,6 +11,8 @@ const EDITABLE_KEYS = [
   'gst_enabled', 'gst_number', 'gst_percentage',
   'payment_provider', 'razorpay_key_id', 'razorpay_key_secret', 'razorpay_webhook_secret',
   'notification_provider', 'notification_api_key', 'notification_from',
+  'trial_duration_days', 'fob_fee_cents', 'admission_fee_cents', 'admission_perks_days',
+  'nav_order',
 ];
 
 router.get('/', (req, res) => {

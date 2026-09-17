@@ -3,6 +3,7 @@ const { db } = require('../db');
 const { requireStaff, hashPassword } = require('../auth');
 const { money, initialsOf, newCode, periodInfo } = require('../utils');
 const settingsStore = require('../settingsStore');
+const { sendQrSvg } = require('../qr');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -88,6 +89,9 @@ router.get('/:id', (req, res) => {
     phone: m.phone, email: m.email, emergency: m.emergency_name ? `${m.emergency_name} · ${m.emergency_phone}` : 'Not on file',
     emergencyName: m.emergency_name, emergencyPhone: m.emergency_phone,
     notes: m.notes, pattern: days.map((v) => ({ style: `flex:1;height:22px;border-radius:4px;background:${v ? '#137a5f' : '#eceded'}` })),
+    qrCode: m.qr_code, fobCode: m.fob_code, qrSuspended: !!m.qr_suspended, fobSuspended: !!m.fob_suspended,
+    fobFeePaid: !!m.fob_fee_paid, admissionFeePaid: !!m.admission_fee_paid, perksUntil: m.perks_until,
+    trialEndsAt: m.trial_ends_at,
   });
 });
 
@@ -146,12 +150,31 @@ router.patch('/:id', (req, res) => {
 });
 
 router.post('/:id/freeze', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
   const membership = db.prepare(
     `SELECT * FROM memberships WHERE member_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1`
   ).get(req.params.id);
   if (!membership) return res.status(404).json({ error: 'No active membership to freeze' });
   db.prepare(`UPDATE memberships SET status = 'frozen', frozen_until = date('now','+30 days') WHERE id = ?`).run(membership.id);
-  db.prepare(`UPDATE members SET status = 'frozen', access_method = 'paused' WHERE id = ?`).run(req.params.id);
+  db.prepare(
+    `UPDATE members SET status = 'frozen', access_method = 'paused', pre_freeze_access_method = ? WHERE id = ?`
+  ).run(member.access_method, member.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/unfreeze', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
+  const membership = db.prepare(
+    `SELECT * FROM memberships WHERE member_id = ? AND status = 'frozen' ORDER BY id DESC LIMIT 1`
+  ).get(req.params.id);
+  if (!membership) return res.status(404).json({ error: 'No frozen membership to unfreeze' });
+  db.prepare(`UPDATE memberships SET status = 'active', frozen_until = NULL WHERE id = ?`).run(membership.id);
+  const restoredAccess = member.pre_freeze_access_method || (member.fob_code ? 'qr_fob' : 'qr');
+  db.prepare(
+    `UPDATE members SET status = 'active', access_method = ?, pre_freeze_access_method = NULL WHERE id = ?`
+  ).run(restoredAccess, member.id);
   res.json({ ok: true });
 });
 
@@ -160,6 +183,83 @@ router.post('/:id/reminder', (req, res) => {
   // intent so the desk knows a nudge was requested, instead of pretending
   // to send a real text.
   res.json({ ok: true, note: 'Reminder queued. Connect an SMS provider in settings to actually send it.' });
+});
+
+router.get('/:id/qr-code.svg', (req, res) => {
+  const member = db.prepare('SELECT qr_code FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).end();
+  sendQrSvg(res, member.qr_code);
+});
+
+router.post('/:id/qr/regenerate', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
+  const code = newCode('QR');
+  db.prepare('UPDATE members SET qr_code = ?, qr_suspended = 0 WHERE id = ?').run(code, member.id);
+  res.json({ ok: true, qrCode: code });
+});
+
+router.post('/:id/qr/suspend', (req, res) => {
+  db.prepare('UPDATE members SET qr_suspended = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/qr/resume', (req, res) => {
+  db.prepare('UPDATE members SET qr_suspended = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/fob/regenerate', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
+  const chargeFee = !!(req.body && req.body.chargeFee);
+  const code = newCode('FOB');
+  const nextAccess = member.access_method === 'qr' ? 'qr_fob' : (member.access_method === 'paused' ? 'fob' : member.access_method);
+  db.prepare('UPDATE members SET fob_code = ?, fob_suspended = 0, access_method = ? WHERE id = ?').run(code, nextAccess, member.id);
+
+  let invoice = null;
+  if (chargeFee && !member.admission_fee_paid) {
+    const feeCents = parseInt(settingsStore.get('fob_fee_cents'), 10) || 0;
+    if (feeCents > 0) {
+      const gst = settingsStore.applyGst(feeCents);
+      db.prepare(
+        `INSERT INTO invoices (member_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method)
+         VALUES (?,?, date('now'), date('now'), date('now'), 'paid', 'card')`
+      ).run(member.id, gst.totalCents);
+      db.prepare('UPDATE members SET fob_fee_paid = 1 WHERE id = ?').run(member.id);
+      invoice = { amount: money(gst.totalCents) };
+    }
+  }
+  res.json({ ok: true, fobCode: code, invoice });
+});
+
+router.post('/:id/fob/suspend', (req, res) => {
+  db.prepare('UPDATE members SET fob_suspended = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/fob/resume', (req, res) => {
+  db.prepare('UPDATE members SET fob_suspended = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/:id/admission-fee', (req, res) => {
+  const member = db.prepare('SELECT * FROM members WHERE id = ?').get(req.params.id);
+  if (!member) return res.status(404).json({ error: 'Not found' });
+  if (member.admission_fee_paid) return res.status(409).json({ error: 'Admission fee already paid for this member.' });
+  const feeCents = parseInt(settingsStore.get('admission_fee_cents'), 10) || 0;
+  const perksDays = parseInt(settingsStore.get('admission_perks_days'), 10) || 30;
+  const gst = settingsStore.applyGst(feeCents);
+  if (feeCents > 0) {
+    db.prepare(
+      `INSERT INTO invoices (member_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method)
+       VALUES (?,?, date('now'), date('now'), date('now'), 'paid', 'card')`
+    ).run(member.id, gst.totalCents);
+  }
+  db.prepare(
+    `UPDATE members SET admission_fee_paid = 1, perks_until = date('now', ?) WHERE id = ?`
+  ).run(`+${perksDays} days`, member.id);
+  res.json({ ok: true, amount: money(gst.totalCents), perksUntil: db.prepare('SELECT perks_until FROM members WHERE id = ?').get(member.id).perks_until });
 });
 
 module.exports = router;

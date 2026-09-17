@@ -79,6 +79,12 @@ function toggleMemberCheckin(member, method) {
   if (member.status === 'frozen' || member.status === 'cancelled') {
     return { error: `Access denied — membership is ${member.status}`, statusCode: 403 };
   }
+  if (method === 'qr' && member.qr_suspended) {
+    return { error: 'This QR code has been suspended — see the desk.', statusCode: 403 };
+  }
+  if (method === 'fob' && member.fob_suspended) {
+    return { error: 'This fob has been suspended — see the desk.', statusCode: 403 };
+  }
   const open = db.prepare(
     `SELECT * FROM checkins WHERE member_id = ? AND checked_out_at IS NULL ORDER BY id DESC LIMIT 1`
   ).get(member.id);

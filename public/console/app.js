@@ -129,6 +129,7 @@
       { id: 'settings-payments', label: 'Payments', roles: ['owner', 'manager'] },
       { id: 'settings-notifications', label: 'Notifications', roles: ['owner', 'manager'] },
       { id: 'settings-backup', label: 'Backup', roles: ['owner', 'manager'] },
+      { id: 'settings-passes', label: 'Archived passes', roles: ['owner', 'manager'] },
     ] },
   ];
   const PAGE_META = {
@@ -138,6 +139,7 @@
     reports: 'Revenue, retention and capacity', reminders: 'Automatic texts and emails',
     'settings-general': 'Gym profile, currency and GST', 'settings-payments': 'Card/UPI processor configuration',
     'settings-notifications': 'SMS and email provider configuration', 'settings-backup': 'Download or restore your data',
+    'settings-passes': 'Deactivated walk-in day pass types',
   };
 
   function allowedFor(role) {
@@ -200,9 +202,11 @@
     go(startRoute);
   }
 
+  let settingsCache = null;
   async function applyBranding() {
     try {
       const settings = await api('/settings');
+      settingsCache = settings;
       document.getElementById('brand-name-label').textContent = settings.gym_name.toUpperCase();
       document.getElementById('brand-sub-label').textContent = settings.gym_tagline;
       document.title = `${settings.gym_name} — Owner Console`;
@@ -250,6 +254,7 @@
       classes: pageClasses, team: pageTeam, reports: pageReports, reminders: pageReminders,
       'settings-general': pageSettingsGeneral, 'settings-payments': pageSettingsPayments,
       'settings-notifications': pageSettingsNotifications, 'settings-backup': pageSettingsBackup,
+      'settings-passes': pageSettingsPasses,
     };
     (fns[route] || pageToday)().catch((err) => {
       pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
@@ -429,8 +434,11 @@
         </div>
         <div style="padding:0 16px 18px;display:grid;gap:8px">
           <button class="btn btn-outline" data-action="edit-member">Edit details</button>
+          <button class="btn btn-outline" data-action="open-access-modal">Manage access</button>
           <button class="btn btn-outline" data-action="send-reminder" data-member="${m.id}">Send reminder</button>
-          ${m.status !== 'frozen' ? `<button class="btn btn-outline" data-action="freeze-member" data-member="${m.id}">Freeze membership</button>` : ''}
+          ${m.status !== 'frozen'
+            ? `<button class="btn btn-outline" data-action="freeze-member" data-member="${m.id}">Freeze membership</button>`
+            : `<button class="btn btn-outline" data-action="unfreeze-member" data-member="${m.id}">Unfreeze membership</button>`}
         </div>`;
     }
 
@@ -595,9 +603,11 @@
         </div>` : ''}
       </div>`).join('')}</div>`));
 
+    state.passTypesCache = passTypes;
     const cols = el(`<div class="grid-2"></div>`);
     cols.appendChild(el(`<section class="card card-pad">
-      <h2 style="font-size:14.5px">Walk-in day passes</h2>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px"><h2 style="font-size:14.5px">Walk-in day passes</h2>
+        ${canManage ? `<button class="btn-quiet" style="margin-left:auto" data-action="open-daypass-type-modal">+ Add type</button>` : ''}</div>
       <p style="margin:4px 0 14px;font-size:12px;color:var(--muted)">Sold at the desk.</p>
       <div class="grid-3">
         ${passTypes.map((t) => {
@@ -606,6 +616,10 @@
             <div style="font-size:12px;color:var(--muted)">${esc(t.name)}</div>
             <div style="font-family:'Archivo Black',sans-serif;font-size:22px;margin-top:5px">${esc(t.price)}</div>
             <div style="font-size:11.5px;color:var(--muted);margin-top:5px">${sold ? sold.sold : 0} sold this month</div>
+            ${canManage ? `<div style="display:flex;gap:8px;margin-top:10px">
+              <button class="btn-outline btn-sm" style="flex:1" data-action="edit-daypass-type" data-id="${t.id}">Edit</button>
+              <button class="btn-outline btn-sm" style="flex:1" data-action="deactivate-daypass-type" data-id="${t.id}">Deactivate</button>
+            </div>` : ''}
           </div>`;
         }).join('')}
       </div>
@@ -790,6 +804,20 @@
       <button class="btn btn-primary" data-action="save-general-settings" style="margin-top:14px">Save settings</button>
     </section>`));
     pageRoot.appendChild(el(`<section class="card card-pad">
+      <h2 style="font-size:14.5px;margin-bottom:6px">Trial, fob &amp; admission fees</h2>
+      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">A trial member gets QR-only access for the trial length below, no plan or charge. A fob fee is charged when a member is issued a physical fob, unless they've paid the admission fee — which also unlocks perks for the days set below.</p>
+      <div class="grid-2" style="margin-bottom:14px">
+        <label class="field">Trial length (days)<input id="set-trial-days" type="number" min="1" value="${esc(settings.trial_duration_days)}"></label>
+        <label class="field">Fob fee<input id="set-fob-fee" type="number" min="0" step="0.01" value="${(Number(settings.fob_fee_cents) / 100).toFixed(2)}"></label>
+      </div>
+      <div class="grid-2">
+        <label class="field">Admission fee<input id="set-admission-fee" type="number" min="0" step="0.01" value="${(Number(settings.admission_fee_cents) / 100).toFixed(2)}"></label>
+        <label class="field">Perks last (days)<input id="set-perks-days" type="number" min="1" value="${esc(settings.admission_perks_days)}"></label>
+      </div>
+      <div id="fees-error" class="login-error hidden" style="margin-top:14px"></div>
+      <button class="btn btn-primary" data-action="save-fee-settings" style="margin-top:14px">Save</button>
+    </section>`));
+    pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:14px">Your password</h2>
       <div class="grid-2" style="margin-bottom:14px">
         <label class="field">Current password<input id="pw-current" type="password"></label>
@@ -822,6 +850,24 @@
     try {
       await withBusy(btn, () => api('/settings', { method: 'PATCH', body }));
       toast('Settings saved.', 'success');
+      applyBranding();
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  async function saveFeeSettings() {
+    const errBox = document.getElementById('fees-error');
+    const btn = document.querySelector('[data-action="save-fee-settings"]');
+    const body = {
+      trial_duration_days: document.getElementById('set-trial-days').value || '3',
+      fob_fee_cents: String(Math.round(parseFloat(document.getElementById('set-fob-fee').value) * 100) || 0),
+      admission_fee_cents: String(Math.round(parseFloat(document.getElementById('set-admission-fee').value) * 100) || 0),
+      admission_perks_days: document.getElementById('set-perks-days').value || '30',
+    };
+    try {
+      await withBusy(btn, () => api('/settings', { method: 'PATCH', body }));
+      toast('Fee settings saved.', 'success');
       applyBranding();
     } catch (err) {
       errBox.textContent = err.message; errBox.classList.remove('hidden');
@@ -967,6 +1013,39 @@
       <h2 style="font-size:14.5px;margin-bottom:6px">Reach this app from a phone on the same wifi</h2>
       <div class="mono" style="font-size:13px;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${sysInfo.memberAppUrls[0] || sysInfo.localMemberAppUrl}</div>
     </section>`));
+  }
+
+  async function pageSettingsPasses() {
+    const allTypes = await api('/plans/day-pass-types?all=1');
+    const inactive = allTypes.filter((t) => !t.active);
+    pageRoot.innerHTML = '';
+    pageRoot.appendChild(el(`<section class="card" style="overflow:hidden">
+      <div class="card-header"><h2>Archived pass types</h2><span class="count">${inactive.length}</span></div>
+      <p style="margin:0;padding:0 20px 14px;font-size:12.5px;color:var(--muted);line-height:1.6">Deactivated walk-in pass types are hidden from the desk's sale screen. Reactivate one to sell it again.</p>
+      <table class="data-table"><thead><tr><th>Name</th><th>Price</th><th>Visits</th><th></th></tr></thead>
+      <tbody>${inactive.length ? inactive.map((t) => `<tr>
+          <td>${esc(t.name)}</td>
+          <td class="mono" style="font-size:12px">${esc(t.price)}</td>
+          <td class="mono" style="font-size:12px">${t.visits}</td>
+          <td><button class="btn-outline btn-sm" data-action="reactivate-daypass-type" data-id="${t.id}">Reactivate</button></td>
+        </tr>`).join('') : `<tr><td colspan="4" class="empty-state">No archived pass types.</td></tr>`}</tbody></table>
+    </section>`));
+  }
+
+  async function deactivateDayPassType(id, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/plans/day-pass-types/${id}/deactivate`, { method: 'POST' }));
+      toast('Pass type archived.', 'success');
+      renderPage('plans');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  async function reactivateDayPassType(id, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/plans/day-pass-types/${id}/reactivate`, { method: 'POST' }));
+      toast('Pass type reactivated.', 'success');
+      renderPage('settings-passes');
+    } catch (err) { toast(err.message, 'error'); }
   }
 
   async function runBackupNow() {
@@ -1117,6 +1196,109 @@
     }
   }
 
+  function openAccessModal() {
+    const m = state.members.detailCache;
+    if (!m) return;
+    modalRoot.innerHTML = '';
+    const perksActive = m.perksUntil && new Date(m.perksUntil) >= new Date(new Date().toDateString());
+    const overlay = el(`<div class="modal-overlay" id="access-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Manage access</h2><p>${esc(m.name)}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <div style="border:1px solid var(--border-soft);border-radius:10px;padding:14px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span style="font-weight:700;font-size:13px">QR code</span>
+            <span class="chip" style="margin-left:auto;${m.qrSuspended ? 'background:var(--danger-bg);color:var(--danger-fg)' : 'background:var(--accent-soft);color:var(--accent-dark)'}">${m.qrSuspended ? 'Suspended' : 'Active'}</span>
+          </div>
+          <div style="text-align:center;background:#fff;border-radius:8px;padding:10px;margin-bottom:10px">
+            <img src="/api/members/${m.id}/qr-code.svg?t=${Date.now()}" alt="QR code" style="width:140px;height:140px">
+            <div class="mono" style="font-size:10.5px;color:var(--muted);margin-top:6px;word-break:break-all">${esc(m.qrCode)}</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-outline btn-sm" style="flex:1" data-action="regenerate-qr" data-id="${m.id}">Generate new</button>
+            <button class="btn-outline btn-sm" style="flex:1" data-action="${m.qrSuspended ? 'resume-qr' : 'suspend-qr'}" data-id="${m.id}">${m.qrSuspended ? 'Resume' : 'Suspend'}</button>
+          </div>
+        </div>
+        <div style="border:1px solid var(--border-soft);border-radius:10px;padding:14px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+            <span style="font-weight:700;font-size:13px">Fob</span>
+            <span class="chip" style="margin-left:auto;${!m.fobCode ? 'background:var(--neutral-bg);color:var(--neutral-fg)' : m.fobSuspended ? 'background:var(--danger-bg);color:var(--danger-fg)' : 'background:var(--accent-soft);color:var(--accent-dark)'}">${!m.fobCode ? 'Not issued' : m.fobSuspended ? 'Suspended' : 'Active'}</span>
+          </div>
+          ${m.fobCode ? `<div class="mono" style="font-size:12px;background:var(--bg);border-radius:8px;padding:10px 12px;margin-bottom:10px;text-align:center">${esc(m.fobCode)}</div>` : `<p style="font-size:12px;color:var(--muted);margin:0 0 10px">This member has no fob yet.</p>`}
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px;${m.admissionFeePaid ? 'color:var(--muted)' : ''}">
+            <input type="checkbox" id="access-charge-fob-fee" ${m.admissionFeePaid ? 'disabled' : 'checked'}>
+            ${m.admissionFeePaid ? 'Fob fee waived (admission fee already paid)' : `Charge fob fee (${settingsCache?.currency_symbol || ''}${((settingsCache?.fob_fee_cents || 0) / 100).toFixed(0)}) for a new fob`}
+          </label>
+          <div style="display:flex;gap:8px">
+            <button class="btn-outline btn-sm" style="flex:1" data-action="regenerate-fob" data-id="${m.id}">${m.fobCode ? 'Generate new' : 'Issue a fob'}</button>
+            ${m.fobCode ? `<button class="btn-outline btn-sm" style="flex:1" data-action="${m.fobSuspended ? 'resume-fob' : 'suspend-fob'}" data-id="${m.id}">${m.fobSuspended ? 'Resume' : 'Suspend'}</button>` : ''}
+          </div>
+        </div>
+        <div style="border:1px solid var(--border-soft);border-radius:10px;padding:14px">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px">Admission fee</div>
+          ${m.admissionFeePaid
+            ? `<p style="font-size:12px;color:var(--muted);margin:0">Paid. ${perksActive ? `Perks active until <b>${esc(m.perksUntil)}</b>.` : `Perks ended ${esc(m.perksUntil || '')}.`}</p>`
+            : `<button class="btn-outline btn-sm" style="width:100%" data-action="charge-admission-fee" data-id="${m.id}">Charge admission fee (${settingsCache?.currency_symbol || ''}${((settingsCache?.admission_fee_cents || 0) / 100).toFixed(0)})</button>
+               <p style="font-size:11px;color:var(--muted);margin:8px 0 0;line-height:1.5">Waives the fob fee and unlocks perks for ${settingsCache?.admission_perks_days || 30} days.</p>`}
+        </div>
+      </div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function reloadAccessModal() {
+    await (async () => {
+      const s = state.members;
+      if (s.selectedId) {
+        const m = await api(`/members/${s.selectedId}`);
+        state.members.detailCache = m;
+      }
+    })();
+    openAccessModal();
+  }
+
+  async function regenerateQr(id) {
+    try {
+      await api(`/members/${id}/qr/regenerate`, { method: 'POST' });
+      toast('New QR code generated.', 'success');
+      await reloadAccessModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function toggleQrSuspend(id, suspend) {
+    try {
+      await api(`/members/${id}/qr/${suspend ? 'suspend' : 'resume'}`, { method: 'POST' });
+      toast(suspend ? 'QR code suspended.' : 'QR code resumed.', 'success');
+      await reloadAccessModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function regenerateFob(id) {
+    const chargeFee = document.getElementById('access-charge-fob-fee')?.checked ?? false;
+    try {
+      const r = await api(`/members/${id}/fob/regenerate`, { method: 'POST', body: { chargeFee } });
+      toast(r.invoice ? `New fob issued — charged ${r.invoice.amount}.` : 'New fob issued.', 'success');
+      await reloadAccessModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function toggleFobSuspend(id, suspend) {
+    try {
+      await api(`/members/${id}/fob/${suspend ? 'suspend' : 'resume'}`, { method: 'POST' });
+      toast(suspend ? 'Fob suspended.' : 'Fob resumed.', 'success');
+      await reloadAccessModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function chargeAdmissionFee(id) {
+    const ok = await confirmDialog({
+      title: 'Charge admission fee?',
+      body: `This charges ${settingsCache?.currency_symbol || ''}${((settingsCache?.admission_fee_cents || 0) / 100).toFixed(0)}, waives the fob fee going forward, and unlocks perks for ${settingsCache?.admission_perks_days || 30} days.`,
+      confirmLabel: 'Charge fee',
+    });
+    if (!ok) return;
+    try {
+      const r = await api(`/members/${id}/admission-fee`, { method: 'POST' });
+      toast(`Charged ${r.amount}. Perks active until ${r.perksUntil}.`, 'success');
+      await reloadAccessModal();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
   function openMemberEditModal(memberId) {
     const m = state.members.detailCache;
     if (!m || m.id !== memberId) return;
@@ -1166,6 +1348,46 @@
       closeModal();
       toast('Member updated.', 'success');
       renderPage('members');
+    } catch (err) {
+      errBox.textContent = err.message; errBox.classList.remove('hidden');
+    }
+  }
+
+  function openDayPassTypeModal(typeId) {
+    const editing = typeId ? (state.passTypesCache || []).find((t) => t.id === typeId) : null;
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="daypass-type-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>${editing ? 'Edit pass type' : 'Add pass type'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <label class="field" style="margin-bottom:12px">Name<input id="dpt-name" value="${esc(editing?.name || '')}" placeholder="e.g. Single pass"></label>
+        <div class="grid-2">
+          <label class="field">Price<input id="dpt-price" type="number" min="0" step="0.01" value="${editing ? (editing.priceCents / 100).toFixed(2) : ''}"></label>
+          <label class="field">Visits included<input id="dpt-visits" type="number" min="1" value="${editing?.visits || 1}"></label>
+        </div>
+        <div id="dpt-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-daypass-type" data-id="${typeId || ''}">${editing ? 'Save changes' : 'Add pass type'}</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function submitDayPassTypeModal(typeId) {
+    const nameEl = document.getElementById('dpt-name');
+    const priceEl = document.getElementById('dpt-price');
+    const name = nameEl.value.trim();
+    const priceCents = Math.round(parseFloat(priceEl.value) * 100);
+    const visits = Number(document.getElementById('dpt-visits').value) || 1;
+    const errBox = document.getElementById('dpt-error');
+    if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
+    if (!priceCents || priceCents <= 0) { markInvalid(priceEl, 'Enter a valid price.'); return; }
+    const btn = document.querySelector('[data-action="submit-daypass-type"]');
+    try {
+      await withBusy(btn, () => api(typeId ? `/plans/day-pass-types/${typeId}` : '/plans/day-pass-types', {
+        method: typeId ? 'PATCH' : 'POST', body: { name, priceCents, visits },
+      }));
+      closeModal();
+      toast(typeId ? 'Pass type updated.' : 'Pass type added.', 'success');
+      renderPage('plans');
     } catch (err) {
       errBox.textContent = err.message; errBox.classList.remove('hidden');
     }
@@ -1623,7 +1845,7 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
-    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay'];
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay'];
     if (!a) {
       if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;
@@ -1641,17 +1863,31 @@
     else if (action === 'kiosk-next') renderKioskIdle();
     else if (action === 'task-jump') { closeModalIfAny(); go('members'); }
     else if (action === 'freeze-member') freezeMember(Number(a.dataset.member), a);
+    else if (action === 'unfreeze-member') unfreezeMember(Number(a.dataset.member), a);
     else if (action === 'send-reminder') sendReminder(Number(a.dataset.member), a);
     else if (action === 'retry-invoice') retryInvoice(Number(a.dataset.id), a);
     else if (action === 'retry-all') retryAll(a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
     else if (action === 'edit-member') openMemberEditModal(state.members.selectedId);
+    else if (action === 'open-access-modal') openAccessModal();
+    else if (action === 'regenerate-qr') regenerateQr(Number(a.dataset.id));
+    else if (action === 'suspend-qr') toggleQrSuspend(Number(a.dataset.id), true);
+    else if (action === 'resume-qr') toggleQrSuspend(Number(a.dataset.id), false);
+    else if (action === 'regenerate-fob') regenerateFob(Number(a.dataset.id));
+    else if (action === 'suspend-fob') toggleFobSuspend(Number(a.dataset.id), true);
+    else if (action === 'resume-fob') toggleFobSuspend(Number(a.dataset.id), false);
+    else if (action === 'charge-admission-fee') chargeAdmissionFee(Number(a.dataset.id));
     else if (action === 'submit-member-edit') submitMemberEdit(Number(a.dataset.id));
     else if (action === 'open-plan-modal') openPlanModal();
     else if (action === 'edit-plan') openPlanModal(Number(a.dataset.id));
     else if (action === 'submit-plan') submitPlanModal(a.dataset.id ? Number(a.dataset.id) : null);
     else if (action === 'deactivate-plan') togglePlanActive(Number(a.dataset.id), false);
     else if (action === 'reactivate-plan') togglePlanActive(Number(a.dataset.id), true);
+    else if (action === 'open-daypass-type-modal') openDayPassTypeModal();
+    else if (action === 'edit-daypass-type') openDayPassTypeModal(Number(a.dataset.id));
+    else if (action === 'submit-daypass-type') submitDayPassTypeModal(a.dataset.id ? Number(a.dataset.id) : null);
+    else if (action === 'deactivate-daypass-type') deactivateDayPassType(Number(a.dataset.id), a);
+    else if (action === 'reactivate-daypass-type') reactivateDayPassType(Number(a.dataset.id), a);
     else if (action === 'open-staff-modal') openStaffModal();
     else if (action === 'edit-staff') openStaffModal(Number(a.dataset.id));
     else if (action === 'submit-staff') submitStaffModal(a.dataset.id ? Number(a.dataset.id) : null);
@@ -1667,6 +1903,7 @@
     else if (action === 'new-class-session') newClassSession(Number(a.dataset.id));
     else if (action === 'submit-class-session') submitClassSession(Number(a.dataset.id));
     else if (action === 'save-general-settings') saveGeneralSettings();
+    else if (action === 'save-fee-settings') saveFeeSettings();
     else if (action === 'save-password') savePasswordChange();
     else if (action === 'save-payment-settings') savePaymentSettings();
     else if (action === 'save-notification-settings') saveNotificationSettings();
@@ -1684,6 +1921,13 @@
     try {
       await withBusy(btnEl, () => api(`/members/${id}/freeze`, { method: 'POST' }));
       toast('Membership frozen.', 'success');
+      renderPage(state.route);
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function unfreezeMember(id, btnEl) {
+    try {
+      await withBusy(btnEl, () => api(`/members/${id}/unfreeze`, { method: 'POST' }));
+      toast('Membership unfrozen — access restored.', 'success');
       renderPage(state.route);
     } catch (err) { toast(err.message, 'error'); }
   }

@@ -71,8 +71,46 @@ router.post('/:id/reactivate', requireStaff('owner', 'manager'), (req, res) => {
 });
 
 router.get('/day-pass-types', (req, res) => {
-  const rows = db.prepare('SELECT * FROM day_pass_types').all();
-  res.json(rows.map((t) => ({ id: t.id, name: t.name, price: money(t.price_cents), visits: t.visits })));
+  const includeInactive = req.query.all === '1';
+  const rows = db.prepare(`SELECT * FROM day_pass_types ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY id`).all();
+  res.json(rows.map((t) => ({
+    id: t.id, name: t.name, price: money(t.price_cents), priceCents: t.price_cents, visits: t.visits, active: !!t.active,
+  })));
+});
+
+router.post('/day-pass-types', requireStaff('owner', 'manager'), (req, res) => {
+  const { name, priceCents, visits = 1 } = req.body || {};
+  if (!name || !priceCents || priceCents <= 0) return res.status(400).json({ error: 'Name and a positive price are required' });
+  const info = db.prepare('INSERT INTO day_pass_types (name, price_cents, visits) VALUES (?,?,?)').run(name, priceCents, visits);
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+router.patch('/day-pass-types/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const type = db.prepare('SELECT * FROM day_pass_types WHERE id = ?').get(req.params.id);
+  if (!type) return res.status(404).json({ error: 'Not found' });
+  const { name, priceCents, visits } = req.body || {};
+  if (priceCents !== undefined && priceCents <= 0) return res.status(400).json({ error: 'Price must be positive' });
+  db.prepare('UPDATE day_pass_types SET name = ?, price_cents = ?, visits = ? WHERE id = ?').run(
+    name ?? type.name, priceCents ?? type.price_cents, visits ?? type.visits, type.id
+  );
+  res.json({ ok: true });
+});
+
+router.delete('/day-pass-types/:id', requireStaff('owner', 'manager'), (req, res) => {
+  const inUse = db.prepare('SELECT COUNT(*) c FROM day_passes WHERE type_id = ?').get(req.params.id).c;
+  if (inUse) return res.status(409).json({ error: `${inUse} day pass(es) already sold under this type — can't delete it.` });
+  db.prepare('DELETE FROM day_pass_types WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/day-pass-types/:id/deactivate', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE day_pass_types SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/day-pass-types/:id/reactivate', requireStaff('owner', 'manager'), (req, res) => {
+  db.prepare('UPDATE day_pass_types SET active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 router.post('/day-passes', (req, res) => {

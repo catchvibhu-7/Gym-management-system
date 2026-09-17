@@ -18,6 +18,11 @@ const DEFAULTS = {
   notification_provider: 'none',
   notification_api_key: '',
   notification_from: '',
+  trial_duration_days: '3',
+  fob_fee_cents: '10000',
+  admission_fee_cents: '0',
+  admission_perks_days: '30',
+  nav_order: '',
 };
 
 // Never echoed back to the client once saved - PATCH accepts a new value,
