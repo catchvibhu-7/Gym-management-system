@@ -14,7 +14,9 @@ toolchain installed).
 
 ```
 npm install
-npm start          # or: npm run dev   (auto-restarts on file changes)
+npm start          # plain server, browser only
+npm run dev        # desktop app (Electron), relaunches on server file changes
+npm run dev:server # plain server only, auto-restarts on file changes
 ```
 
 The server seeds demo data on first boot (idempotent — skips if data already
@@ -55,7 +57,8 @@ belong in a desktop package.
 
 ```
 npm install
-npm run electron        # dev: launches the app window directly
+npm run dev             # launches the app window, relaunches it on server file changes
+npm run electron        # launches the app window once, no watch/relaunch
 npm run electron:build  # produces a Windows installer in dist-electron/
 ```
 

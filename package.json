@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node server/index.js",
-    "dev": "nodemon --watch server --ext js,sql server/index.js",
+    "dev": "nodemon --watch server --ext js,sql --exec \"electron .\"",
+    "dev:server": "nodemon --watch server --ext js,sql server/index.js",
     "seed": "node server/seed.js",
     "electron": "electron .",
     "electron:build": "electron-builder"
