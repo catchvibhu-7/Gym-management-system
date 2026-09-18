@@ -96,6 +96,31 @@ function migrateWorkoutPlansMemberIdNullable(db) {
   }
 }
 
+// A member's email had no uniqueness constraint at all - phone already
+// does (schema.sql: UNIQUE NOT NULL), but two different members could
+// share the same email. A plain index creation would fail outright if any
+// duplicates already exist in a real database, crashing the app on every
+// boot until someone manually fixed the data - so this checks first and
+// only adds the constraint once the data is actually clean, logging a
+// clear warning (not a crash) otherwise. Self-heals: it tries again, and
+// succeeds, the very next boot after the duplicates are resolved.
+function migrateMembersEmailUnique(db) {
+  const exists = db.prepare(
+    `SELECT COUNT(*) c FROM sqlite_master WHERE type = 'index' AND name = 'idx_members_email_unique'`
+  ).get().c > 0;
+  if (exists) return;
+  const dupes = db.prepare(
+    `SELECT email, COUNT(*) c FROM members WHERE email IS NOT NULL AND email != '' GROUP BY email HAVING c > 1`
+  ).all();
+  if (dupes.length) {
+    console.warn(
+      `Skipping unique-email constraint on members: ${dupes.length} email address(es) are already shared by more than one member (e.g. "${dupes[0].email}"). Fix those duplicates, then restart to have this take effect.`
+    );
+    return;
+  }
+  db.exec('CREATE UNIQUE INDEX idx_members_email_unique ON members(email)');
+}
+
 function runMigrations(db) {
   ensureColumn(db, 'plans', 'billing_period', "TEXT NOT NULL DEFAULT 'monthly'");
   ensureColumn(db, 'memberships', 'billing_period', "TEXT NOT NULL DEFAULT 'monthly'");
@@ -141,6 +166,7 @@ function runMigrations(db) {
     // change to primary_channel can't get silently reverted on next boot.
     db.exec(`UPDATE automations SET primary_channel = channel WHERE channel IS NOT NULL`);
   }
+  migrateMembersEmailUnique(db);
 }
 
 module.exports = { runMigrations, ensureColumn, hasColumn };

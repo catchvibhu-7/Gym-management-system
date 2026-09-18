@@ -110,6 +110,10 @@ router.post('/', (req, res) => {
   if (hasCharge && !paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
   const existing = db.prepare('SELECT id FROM members WHERE phone = ?').get(phone);
   if (existing) return res.status(409).json({ error: 'A member with this phone already exists' });
+  if (email) {
+    const emailClash = db.prepare('SELECT id FROM members WHERE email = ?').get(email);
+    if (emailClash) return res.status(409).json({ error: 'A member with this email already exists' });
+  }
 
   const last4 = phone.replace(/\D/g, '').slice(-4) || '0000';
   // A trial signup is never a real plan/membership/invoice - just a member
@@ -178,6 +182,10 @@ router.patch('/:id', (req, res) => {
   if (phone && phone !== member.phone) {
     const clash = db.prepare('SELECT id FROM members WHERE phone = ? AND id != ?').get(phone, member.id);
     if (clash) return res.status(409).json({ error: 'Another member already uses this phone number' });
+  }
+  if (email && email !== member.email) {
+    const emailClash = db.prepare('SELECT id FROM members WHERE email = ? AND id != ?').get(email, member.id);
+    if (emailClash) return res.status(409).json({ error: 'Another member already uses this email' });
   }
   // `?? member.x` only falls back on null/undefined, so an explicit
   // `null` sent to clear an optional field (email/emergency contact/notes -
