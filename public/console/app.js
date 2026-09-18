@@ -187,6 +187,7 @@
       { id: 'settings-payments', label: 'Payments', roles: ['owner', 'manager'] },
       { id: 'settings-notifications', label: 'Notifications', roles: ['owner', 'manager'] },
       { id: 'settings-backup', label: 'Backup', roles: ['owner', 'manager', 'admin'] },
+      { id: 'settings-links', label: 'Links', roles: [...DATA_STAFF_ROLES, 'admin'] },
       { id: 'settings-passes', label: 'Archived passes', roles: ['owner', 'manager'] },
     ] },
   ];
@@ -201,6 +202,7 @@
     'settings-notifications': 'SMS and email provider configuration', 'settings-backup': 'Download or restore your data',
     'settings-passes': 'Deactivated walk-in day pass types',
     'plan-library': 'Reusable workout plans - trainer and universal',
+    'settings-links': 'Console, member, and kiosk URLs for this deployment',
   };
 
   const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -471,7 +473,7 @@
       classes: pageClasses, team: pageTeam, reports: pageReports, reminders: pageReminders,
       'settings-general': pageSettingsGeneral, 'settings-payments': pageSettingsPayments,
       'settings-notifications': pageSettingsNotifications, 'settings-backup': pageSettingsBackup,
-      'settings-passes': pageSettingsPasses,
+      'settings-passes': pageSettingsPasses, 'settings-links': pageSettingsLinks,
       'pt-sessions': pagePtSessions, facilities: pageFacilities, 'staff-attendance': pageStaffAttendance,
       'plan-library': pagePlanLibrary,
     };
@@ -1545,7 +1547,7 @@
 
   // ---------- Settings: Backup ----------
   async function pageSettingsBackup() {
-    const [backups, sysInfo] = await Promise.all([api('/backup'), api('/system/info')]);
+    const backups = await api('/backup');
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:6px">Backups</h2>
@@ -1569,10 +1571,45 @@
       <div id="restore-error" class="login-error hidden" style="margin-top:12px"></div>
       <button class="btn" style="margin-top:12px;border-color:var(--danger-fg);color:var(--danger-fg)" data-action="restore-backup">Restore from file…</button>
     </section>`));
+  }
+
+  // ---------- Settings: Links ----------
+  async function pageSettingsLinks() {
+    const sysInfo = await api('/system/info');
+    pageRoot.innerHTML = '';
+    function linkRow(link) {
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-soft)">
+        <div style="width:120px;flex:none;font-size:12.5px;font-weight:600">${esc(link.label)}</div>
+        <div class="mono" style="flex:1;min-width:0;font-size:12.5px;background:var(--bg);border-radius:6px;padding:7px 10px;overflow-x:auto;white-space:nowrap">${esc(link.url)}</div>
+        <button class="btn-outline btn-sm" data-copy-link="${esc(link.url)}">Copy</button>
+      </div>`;
+    }
     pageRoot.appendChild(el(`<section class="card card-pad">
-      <h2 style="font-size:14.5px;margin-bottom:6px">Reach this app from a phone on the same wifi</h2>
-      <div class="mono" style="font-size:13px;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${sysInfo.memberAppUrls[0] || sysInfo.localMemberAppUrl}</div>
+      <h2 style="font-size:14.5px;margin-bottom:4px">On this computer</h2>
+      <p style="margin:0 0 10px;font-size:12px;color:var(--muted)">Only reachable from this machine itself.</p>
+      ${sysInfo.localLinks.map(linkRow).join('')}
     </section>`));
+    sysInfo.remoteLinkGroups.forEach((group) => {
+      pageRoot.appendChild(el(`<section class="card card-pad" style="margin-top:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <h2 style="font-size:14.5px">${group.kind === 'tailscale' ? 'Over Tailscale' : 'On this network'}</h2>
+          <span class="chip" style="${group.kind === 'tailscale' ? 'background:var(--accent-soft);color:var(--accent-dark)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${esc(group.address)}</span>
+        </div>
+        <p style="margin:0 0 10px;font-size:12px;color:var(--muted)">${group.kind === 'tailscale' ? 'Reachable from any device on your Tailscale network, wherever it is.' : 'Reachable from any device on the same wifi/network as this computer.'}</p>
+        ${group.links.map(linkRow).join('')}
+      </section>`));
+    });
+    if (!sysInfo.remoteLinkGroups.length) {
+      pageRoot.appendChild(el(`<div class="empty-state" style="margin-top:16px">No network address found yet - connect this computer to wifi/ethernet (or Tailscale) to get a link other devices can use.</div>`));
+    }
+    pageRoot.querySelectorAll('[data-copy-link]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(b.dataset.copyLink);
+        toast('Link copied.', 'success');
+      } catch (err) {
+        toast('Could not copy - select and copy the link manually.', 'error');
+      }
+    }));
   }
 
   async function pageSettingsPasses() {

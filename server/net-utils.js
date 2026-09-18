@@ -42,4 +42,13 @@ function getLanIPs() {
   return ips;
 }
 
-module.exports = { findAvailablePort, getLanIPs };
+// Tailscale always hands out addresses in its CGNAT range (100.64.0.0/10) -
+// this is what lets the Links page label a Tailscale address apart from a
+// plain router-assigned LAN one (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+// without needing to shell out to `tailscale status`.
+function isTailscaleIp(ip) {
+  const parts = ip.split('.').map(Number);
+  return parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
+}
+
+module.exports = { findAvailablePort, getLanIPs, isTailscaleIp };
