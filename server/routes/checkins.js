@@ -93,12 +93,22 @@ router.get('/lapsed', requireStaff(), (req, res) => {
   })));
 });
 
-function toggleMemberCheckin(member, method) {
+// `reportedMethod` is what actually gets logged on an access_alerts row -
+// usually the same as `method`, except NFC taps are still recorded as a
+// plain 'fob' checkin (they read the same fob_code, just via a phone's own
+// NFC radio instead of a dedicated reader) but should still show up as
+// "nfc" in the alert so the owner knows which door/device it came from.
+function toggleMemberCheckin(member, method, reportedMethod) {
+  const via = reportedMethod || method;
   if (member.status === 'frozen' || member.status === 'cancelled') {
-    return { error: `Access denied — membership is ${member.status}`, statusCode: 403 };
+    db.prepare(`INSERT INTO access_alerts (member_id, method, reason) VALUES (?, ?, ?)`)
+      .run(member.id, via, member.status === 'frozen' ? 'Membership frozen' : 'Membership cancelled');
+    return { error: `Access denied — membership is ${member.status}`, statusCode: 403, denied: true, name: member.name };
   }
   if (member.status === 'trial' && member.trial_ends_at && member.trial_ends_at < todayISO()) {
-    return { error: 'Trial has ended — see the desk to join a plan.', statusCode: 403 };
+    db.prepare(`INSERT INTO access_alerts (member_id, method, reason) VALUES (?, ?, ?)`)
+      .run(member.id, via, 'Trial ended');
+    return { error: 'Trial has ended — see the desk to join a plan.', statusCode: 403, denied: true, name: member.name };
   }
   if (method === 'qr' && member.qr_suspended) {
     return { error: 'This QR code has been suspended — see the desk.', statusCode: 403 };
@@ -138,14 +148,14 @@ router.post('/scan-by-member', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
 });
 
 router.post('/scan', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
-  const { code } = req.body || {};
+  const { code, via } = req.body || {};
   if (!code) return res.status(400).json({ error: 'Code required' });
 
   const member = db.prepare('SELECT * FROM members WHERE qr_code = ? OR fob_code = ?').get(code, code);
   if (member) {
     const method = code === member.fob_code ? 'fob' : 'qr';
-    const result = toggleMemberCheckin(member, method);
-    if (result.error) return res.status(result.statusCode).json({ error: result.error });
+    const result = toggleMemberCheckin(member, method, via);
+    if (result.error) return res.status(result.statusCode).json({ error: result.error, denied: result.denied, name: result.name });
     return res.json(result);
   }
 
@@ -157,6 +167,28 @@ router.post('/scan', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   }
 
   return res.status(404).json({ error: 'Code not recognized' });
+});
+
+// Denied taps for a real (frozen/cancelled/expired-trial) membership reason
+// get logged here so the owner sees them even if nobody was watching the
+// kiosk when it happened - see toggleMemberCheckin above.
+router.get('/alerts', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+  const rows = db.prepare(
+    `SELECT a.id, a.method, a.reason, a.created_at, m.id member_id, m.name member_name
+     FROM access_alerts a LEFT JOIN members m ON m.id = a.member_id
+     WHERE a.acknowledged = 0 ORDER BY a.id DESC LIMIT 50`
+  ).all();
+  res.json(rows);
+});
+
+router.post('/alerts/:id/ack', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+  db.prepare('UPDATE access_alerts SET acknowledged = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/alerts/ack-all', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+  db.prepare('UPDATE access_alerts SET acknowledged = 1 WHERE acknowledged = 0').run();
+  res.json({ ok: true });
 });
 
 module.exports = router;

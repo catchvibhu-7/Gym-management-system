@@ -11,6 +11,7 @@ seed();
 const { UPLOADS_DIR } = require('./storage');
 const { findAvailablePort, getLanIPs } = require('./net-utils');
 const { startBackupSchedule } = require('./backup');
+const { startAutoCheckoutSchedule } = require('./auto-checkout');
 const { ensureSelfSignedCert, getTailscaleCert } = require('./https-cert');
 const runtimeInfo = require('./runtime-info');
 
@@ -141,6 +142,7 @@ async function startServer() {
       }
 
       startBackupSchedule();
+      startAutoCheckoutSchedule();
       resolve({ app, server, httpsServer, port, httpsPort, lanIPs });
     });
   });

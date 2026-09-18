@@ -1,7 +1,9 @@
+const fs = require('fs');
 const express = require('express');
 const { requireStaff, STAFF_ROLES } = require('../auth');
 const { getLanIPs, isTailscaleIp } = require('../net-utils');
 const runtimeInfo = require('../runtime-info');
+const { CERT_FILE } = require('../https-cert');
 
 const router = express.Router();
 router.use(requireStaff(...STAFF_ROLES, 'admin'));
@@ -50,6 +52,18 @@ router.get('/info', (req, res) => {
     memberAppUrls: lanIPs.map((ip) => `http://${ip}:${port}/member/`),
     localMemberAppUrl: `http://localhost:${port}/member/`,
   });
+});
+
+// The self-signed cert's public half (never the private key) - a device
+// that needs Safari/iOS to trust it outright (rather than relying on a
+// one-time "connection not private" click-through) installs this as a
+// profile: Settings > (tap the downloaded file) > install > then General >
+// About > Certificate Trust Settings > enable full trust for it.
+router.get('/cert', (req, res) => {
+  if (!fs.existsSync(CERT_FILE)) return res.status(404).json({ error: 'No certificate generated yet - restart the server once to create one.' });
+  res.setHeader('Content-Type', 'application/x-pem-file');
+  res.setHeader('Content-Disposition', 'attachment; filename="forge-room-gym-cert.pem"');
+  fs.createReadStream(CERT_FILE).pipe(res);
 });
 
 module.exports = router;

@@ -121,6 +121,21 @@ CREATE TABLE IF NOT EXISTS checkins (
   CHECK ((member_id IS NOT NULL) OR (day_pass_id IS NOT NULL))
 );
 
+-- Logged whenever a tap/scan is denied for a membership reason (frozen,
+-- cancelled, trial ended) rather than a not-found/wrong-code reason - the
+-- kiosk shows this instantly either way, but a denial specifically means
+-- someone with a real account is standing at the door unable to get in,
+-- which the owner should actually see even if they weren't watching the
+-- kiosk at that moment.
+CREATE TABLE IF NOT EXISTS access_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  member_id INTEGER REFERENCES members(id) ON DELETE CASCADE,
+  method TEXT NOT NULL CHECK (method IN ('qr','fob','nfc','manual')),
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  acknowledged INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS classes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

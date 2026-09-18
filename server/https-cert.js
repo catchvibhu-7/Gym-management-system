@@ -89,4 +89,4 @@ async function getTailscaleCert() {
   }
 }
 
-module.exports = { ensureSelfSignedCert, getTailscaleCert };
+module.exports = { ensureSelfSignedCert, getTailscaleCert, CERT_FILE };

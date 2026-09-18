@@ -17,7 +17,11 @@
     });
     let data = null;
     try { data = await res.json(); } catch (e) { /* empty body */ }
-    if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+    if (!res.ok) {
+      const err = new Error((data && data.error) || `Request failed (${res.status})`);
+      err.data = data;
+      throw err;
+    }
     return data;
   }
 
@@ -492,9 +496,18 @@
     return el(`<div class="pill"><span class="live-dot"></span><span class="mono">${count}</span> in the gym now</div>`);
   }
 
+  async function ackAlert(id) {
+    await api(`/checkins/alerts/${id}/ack`, { method: 'POST' });
+    if (state.route === 'today') renderPage('today');
+  }
+  async function ackAllAlerts() {
+    await api('/checkins/alerts/ack-all', { method: 'POST' });
+    if (state.route === 'today') renderPage('today');
+  }
+
   // ---------- Today ----------
   async function pageToday() {
-    const [d, frequent] = await Promise.all([api('/dashboard/today'), api('/checkins/frequent-today')]);
+    const [d, frequent, alerts] = await Promise.all([api('/dashboard/today'), api('/checkins/frequent-today'), api('/checkins/alerts')]);
     setTopActions([
       insideNowPill(d.insideNow),
       el(`<button class="btn" data-action="open-day-pass">Sell day pass</button>`),
@@ -502,6 +515,23 @@
     ]);
 
     pageRoot.innerHTML = '';
+    if (alerts.length) {
+      const methodLabel = { qr: 'QR', fob: 'Fob', nfc: 'NFC' };
+      pageRoot.appendChild(el(`<section class="card" style="margin-bottom:16px;border:1px solid #e0554a">
+        <div class="card-header" style="background:#fdeceb">
+          <h2 style="color:#b3261e">⚠ Access denied at the door</h2><span class="count" style="background:#e0554a;color:#fff">${alerts.length}</span>
+          <button class="btn-quiet" style="margin-left:auto" data-action="ack-all-alerts">Dismiss all</button>
+        </div>
+        ${alerts.map((a) => `
+          <div class="row">
+            <div style="min-width:0;flex:1">
+              <div style="font-size:13.5px;font-weight:600">${esc(a.member_name || 'Unknown member')}</div>
+              <div style="font-size:12px;color:var(--muted)">${esc(a.reason)} · tried ${esc(methodLabel[a.method] || a.method)} · ${esc(a.created_at)}</div>
+            </div>
+            <button class="btn-outline btn-sm" data-action="ack-alert" data-id="${a.id}">Dismiss</button>
+          </div>`).join('')}
+      </section>`));
+    }
     const stats = el(`<div class="grid-3" style="grid-template-columns:1.5fr 1fr 1fr">
       <div class="stat-dark">
         <div class="label">Monthly recurring revenue</div>
@@ -1196,6 +1226,27 @@
     </section>`));
     pageRoot.appendChild(el(`<div class="grid-3">${stats.map((s) => `
       <div class="stat-card"><div class="label">${esc(s.label)}</div><div class="value">${esc(s.value)}</div><div class="note">${esc(s.note)}</div></div>`).join('')}</div>`));
+
+    if (['owner', 'manager'].includes(state.staff.role)) {
+      const thisMonth = new Date().toISOString().slice(0, 7);
+      pageRoot.appendChild(el(`<section class="card card-pad" style="margin-top:16px">
+        <h2 style="font-size:14.5px;margin-bottom:4px">Export (CSV)</h2>
+        <p style="margin:0 0 12px;font-size:12px;color:var(--muted)">Raw records for a bookkeeper/accountant or a compliance audit - pick a month, then download whichever file you need.</p>
+        <input type="month" id="export-month" value="${thisMonth}" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border-soft);margin-bottom:12px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <a class="btn-outline btn-sm" id="export-invoices" href="/api/reports/export/invoices.csv?month=${thisMonth}">Invoices</a>
+          <a class="btn-outline btn-sm" id="export-checkins" href="/api/reports/export/checkins.csv?month=${thisMonth}">Check-ins</a>
+          <a class="btn-outline btn-sm" id="export-alerts" href="/api/reports/export/access-alerts.csv?month=${thisMonth}">Access-denied log</a>
+          <a class="btn-outline btn-sm" href="/api/reports/export/members.csv">Member roster (current)</a>
+        </div>
+      </section>`));
+      document.getElementById('export-month').addEventListener('change', (e) => {
+        const m = e.target.value;
+        document.getElementById('export-invoices').href = `/api/reports/export/invoices.csv?month=${m}`;
+        document.getElementById('export-checkins').href = `/api/reports/export/checkins.csv?month=${m}`;
+        document.getElementById('export-alerts').href = `/api/reports/export/access-alerts.csv?month=${m}`;
+      });
+    }
   }
 
   // ---------- Reminders ----------
@@ -1617,6 +1668,34 @@
         <p style="margin:0 0 10px;font-size:12px;color:var(--muted)">Your Tailscale network has HTTPS certificates enabled, so these need no warning at all - full camera access from any device on your tailnet.</p>
         ${sysInfo.tailscaleHttps.links.map(linkRow).join('')}
       </section>`));
+    }
+    if (sysInfo.httpsPort) {
+      pageRoot.appendChild(el(`<section class="card card-pad" style="margin-top:16px">
+        <h2 style="font-size:14.5px;margin-bottom:4px">Certificate</h2>
+        <p style="margin:0 0 10px;font-size:12px;color:var(--muted);line-height:1.6">Safari on iPhone/iPad is stricter than other browsers about the self-signed certificate above - it may refuse the connection outright instead of offering a "continue anyway" option. If that happens, get this file onto that device (share it directly, or download then AirDrop/email it) and install it: opening the file prompts a profile install under Settings, then go to Settings &gt; General &gt; About &gt; Certificate Trust Settings and enable full trust for it. Firefox and Chrome don't need this - they already let you click through.</p>
+        <div style="display:flex;gap:8px">
+          <button class="btn-outline btn-sm" id="cert-share-btn">Share certificate</button>
+          <button class="btn-outline btn-sm" id="cert-download-btn">Download certificate</button>
+        </div>
+      </section>`));
+      document.getElementById('cert-download-btn').addEventListener('click', () => {
+        window.open('/api/system/cert', '_blank');
+      });
+      document.getElementById('cert-share-btn').addEventListener('click', async () => {
+        try {
+          const certRes = await fetch('/api/system/cert', { credentials: 'include' });
+          if (!certRes.ok) throw new Error('Certificate not available');
+          const blob = await certRes.blob();
+          const file = new File([blob], 'forge-room-gym-cert.pem', { type: 'application/x-pem-file' });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: 'Forge Room Gym certificate' });
+          } else {
+            window.open('/api/system/cert', '_blank');
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') toast('Could not share - use Download instead.', 'error');
+        }
+      });
     }
     pageRoot.querySelectorAll('[data-copy-link]').forEach((b) => b.addEventListener('click', async () => {
       try {
@@ -2832,6 +2911,9 @@
   }
   async function closeKiosk() {
     if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
+    stopNfcScan();
+    if (kioskRoot._fullscreenListener) { document.removeEventListener('fullscreenchange', kioskRoot._fullscreenListener); kioskRoot._fullscreenListener = null; }
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     if (state.staff && state.staff.role === 'kiosk') {
       // A kiosk account has nothing behind this screen to return to -
       // "exit" for it means signing out, not revealing the app shell.
@@ -2849,13 +2931,15 @@
 
   async function renderKioskIdle() {
     const inside = await api('/checkins/inside');
+    if (kioskRoot._fullscreenListener) { document.removeEventListener('fullscreenchange', kioskRoot._fullscreenListener); kioskRoot._fullscreenListener = null; }
     kioskRoot.innerHTML = '';
     kioskRoot.appendChild(el(`<div class="kiosk-overlay">
       <div class="kiosk-top">
         <div class="brand-mark">F</div><div class="brand-name" style="font-size:15px">FORGE ROOM</div>
         <div style="margin-left:auto;display:flex;align-items:center;gap:16px">
           <span class="mono" style="font-size:13px;color:var(--muted-2)" id="kiosk-clock"></span>
-          <button class="btn-outline" style="background:transparent;border-color:#33382f;color:#c9cdc4" data-action="close-kiosk">${state.staff && state.staff.role === 'kiosk' ? 'Log out' : 'Exit kiosk'}</button>
+          <button class="btn-outline" id="kiosk-fullscreen-toggle" style="background:transparent;border-color:#33382f;color:#c9cdc4">${document.fullscreenElement ? 'Exit full screen' : 'Full screen'}</button>
+          <button class="btn-outline" data-action="close-kiosk" style="background:transparent;border-color:#33382f;color:#c9cdc4">${state.staff && state.staff.role === 'kiosk' ? 'Log out' : 'Exit kiosk'}</button>
         </div>
       </div>
       <div class="kiosk-mid">
@@ -2868,6 +2952,7 @@
           <h2 style="font-family:'Archivo Black',sans-serif;font-size:30px;letter-spacing:-1px;margin:0">Scan your code or tap your fob</h2>
           <p style="margin:12px 0 20px;font-size:14px;color:var(--muted-2);line-height:1.55">Type or scan the code, then press Enter.</p>
           <input id="kiosk-scan-input" autofocus placeholder="Scan code…" style="width:100%;text-align:center;font-size:16px;padding:14px;border-radius:10px;border:1px solid #33382f;background:#16180f;color:#fff">
+          <div id="kiosk-nfc-status" class="hidden" style="margin-top:10px;font-size:12px;color:#7fd3b6">NFC ready — tap a card or fob</div>
           <div id="kiosk-error" style="margin-top:14px;color:#ff8a80;font-size:13px"></div>
           <div style="margin-top:22px;border-top:1px solid #23261f;padding-top:18px">
             <div style="font-size:11.5px;color:var(--muted-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Or check in manually</div>
@@ -2899,6 +2984,20 @@
     // Front camera on by default - a kiosk tablet usually faces the member,
     // not the door, so this is the useful default (auto-start, no click).
     startCameraScan();
+
+    // Full screen matters most for a phone/tablet opened as a plain browser
+    // tab (no OS chrome to hide otherwise) - the Electron desktop app has
+    // its own F11 menu item for the same thing, this covers the other case.
+    const fsBtn = document.getElementById('kiosk-fullscreen-toggle');
+    const updateFsLabel = () => { if (fsBtn) fsBtn.textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen'; };
+    fsBtn.addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else kioskRoot.requestFullscreen().catch(() => { toast('Full screen is not available on this device.', 'error'); });
+    });
+    document.addEventListener('fullscreenchange', updateFsLabel);
+    kioskRoot._fullscreenListener = updateFsLabel;
+
+    startNfcScan();
 
     const searchInput = document.getElementById('kiosk-member-search');
     let searchTimer;
@@ -3012,6 +3111,49 @@
     await startCameraScan(cameraDevices[cameraDeviceIndex].deviceId);
   }
 
+  // NFC tap-to-check-in: Web NFC (NDEFReader) only exists on Android Chrome
+  // over a secure context - there's no equivalent API on iOS/Safari or
+  // desktop at all, so this silently does nothing there (no error shown -
+  // most devices simply don't have this option, that's not a failure).
+  // A tapped tag's first NDEF text record is read as the check-in code,
+  // the exact same code space QR/fob already use - write a member's
+  // existing fob code onto a writable NFC tag (e.g. with the free "NFC
+  // Tools" Android app: Write > Text record > paste the fob code from
+  // Manage Access) and a tap works exactly like scanning that fob. If a
+  // tag has no NDEF record at all (common for fixed-UID access fobs),
+  // falls back to the tag's raw serial number - for that to work, whatever
+  // wrote/sold the fob must have that same serial recorded as the member's
+  // fob code instead.
+  async function startNfcScan() {
+    if (typeof window.NDEFReader === 'undefined') return;
+    const statusEl = document.getElementById('kiosk-nfc-status');
+    try {
+      const ndef = new window.NDEFReader();
+      const controller = new AbortController();
+      await ndef.scan({ signal: controller.signal });
+      kioskRoot._stopNfcScan = () => controller.abort();
+      ndef.onreading = (event) => {
+        let code = null;
+        for (const record of event.message.records) {
+          if (record.recordType === 'text') {
+            try { code = new TextDecoder(record.encoding || 'utf-8').decode(record.data).trim(); } catch (e) { /* ignore */ }
+            break;
+          }
+        }
+        if (!code && event.serialNumber) code = event.serialNumber;
+        if (code) doScan(code, 'nfc');
+      };
+      if (statusEl) statusEl.classList.remove('hidden');
+    } catch (err) {
+      // Permission denied, no NFC hardware, or the browser lied about
+      // supporting NDEFReader - camera/manual scan still work either way.
+      if (statusEl) statusEl.classList.add('hidden');
+    }
+  }
+  function stopNfcScan() {
+    if (kioskRoot._stopNfcScan) { kioskRoot._stopNfcScan(); kioskRoot._stopNfcScan = null; }
+  }
+
   async function doScanByMemberId(memberId) {
     // Manual desk-assisted check-in: staff picked a member by name, so we
     // resolve their code server-side by id instead of typing a code.
@@ -3019,28 +3161,46 @@
       const result = await api(`/checkins/scan-by-member`, { method: 'POST', body: { memberId } });
       renderKioskResult(result);
     } catch (err) {
+      if (err.data && err.data.denied) {
+        renderKioskResult({ action: 'denied', name: err.data.name, reason: err.message });
+        return;
+      }
       const errBox = document.getElementById('kiosk-error');
       if (errBox) errBox.textContent = err.message;
     }
   }
 
-  async function doScan(code) {
+  async function doScan(code, via) {
     const errBox = document.getElementById('kiosk-error');
     try {
-      const result = await api('/checkins/scan', { method: 'POST', body: { code } });
+      const result = await api('/checkins/scan', { method: 'POST', body: { code, via } });
       renderKioskResult(result);
     } catch (err) {
+      if (err.data && err.data.denied) {
+        renderKioskResult({ action: 'denied', name: err.data.name, reason: err.message });
+        return;
+      }
       if (errBox) errBox.textContent = err.message;
-      document.getElementById('kiosk-scan-input').value = '';
+      const input = document.getElementById('kiosk-scan-input');
+      if (input) input.value = '';
     }
   }
 
   function renderKioskResult(result) {
     if (kioskRoot._clockTimer) clearInterval(kioskRoot._clockTimer);
     if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
+    stopNfcScan();
     const overlay = kioskRoot.querySelector('.kiosk-overlay');
     const mid = overlay.querySelector('.kiosk-mid');
-    if (result.action === 'checked_out') {
+    if (result.action === 'denied') {
+      mid.innerHTML = `<div style="text-align:center">
+        <div style="width:110px;height:110px;margin:0 auto 20px;border-radius:999px;background:#e0554a;display:grid;place-items:center;font-size:44px">✕</div>
+        <div style="font-size:13px;color:#ff8a80;letter-spacing:0.1em;text-transform:uppercase">Access denied</div>
+        <h2 style="margin:8px 0;font-family:'Archivo Black',sans-serif;font-size:40px">${esc(result.name || 'Not recognized')}</h2>
+        <p style="margin:0 0 20px;font-size:15px;color:#c9cdc4">${esc(result.reason || '')}</p>
+        <button class="btn-outline" style="background:transparent;border-color:#33382f;color:#c9cdc4" data-action="kiosk-next">Next person</button>
+      </div>`;
+    } else if (result.action === 'checked_out') {
       mid.innerHTML = `<div style="text-align:center">
         <div style="width:100px;height:100px;margin:0 auto 20px;border-radius:999px;background:#33382f;display:grid;place-items:center;font-size:36px">👋</div>
         <h2 style="font-family:'Archivo Black',sans-serif;font-size:34px">${esc(result.name || 'See you soon')}</h2>
@@ -3083,6 +3243,8 @@
     else if (action === 'open-kiosk-from-page') openKiosk();
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();
+    else if (action === 'ack-alert') ackAlert(Number(a.dataset.id));
+    else if (action === 'ack-all-alerts') ackAllAlerts();
     else if (action === 'task-jump') {
       closeModalIfAny();
       if (a.dataset.invoice) settleInvoice(Number(a.dataset.invoice), a);
