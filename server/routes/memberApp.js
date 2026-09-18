@@ -61,14 +61,21 @@ router.get('/classes/upcoming', (req, res) => {
   const rows = db.prepare(
     `SELECT cs.id, cl.name, cs.start_at, cl.capacity, s.name coach,
        (SELECT COUNT(*) FROM bookings b WHERE b.session_id = cs.id AND b.status IN ('booked','attended')) booked,
-       EXISTS(SELECT 1 FROM bookings b WHERE b.session_id = cs.id AND b.member_id = ? AND b.status IN ('booked','attended')) mine
+       (SELECT status FROM bookings b WHERE b.session_id = cs.id AND b.member_id = ? AND b.status IN ('booked','attended','waitlisted') LIMIT 1) myStatus
      FROM class_sessions cs JOIN classes cl ON cl.id = cs.class_id
      LEFT JOIN staff s ON s.id = cl.coach_staff_id
      WHERE cs.start_at >= datetime('now') ORDER BY cs.start_at LIMIT 12`
   ).all(req.member.id);
+  // myStatus used to only ever check booked/attended, so a member who was
+  // waitlisted (not booked) saw an untouched "Waitlist" button again on
+  // their next visit - inviting a duplicate click that just failed with a
+  // generic "Already booked" error instead of showing they were already
+  // queued.
   res.json(rows.map((r) => ({
     id: r.id, name: r.name, at: r.start_at, coach: r.coach,
-    spotsLeft: Math.max(0, r.capacity - r.booked), booked: !!r.mine,
+    spotsLeft: Math.max(0, r.capacity - r.booked),
+    booked: r.myStatus === 'booked' || r.myStatus === 'attended',
+    waitlisted: r.myStatus === 'waitlisted',
   })));
 });
 

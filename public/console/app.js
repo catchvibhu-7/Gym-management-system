@@ -585,9 +585,10 @@
         <div style="padding:0 16px 14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:10.5px;color:var(--muted);text-transform:uppercase">Workout plan</div>
             <button class="btn-quiet" style="margin-left:auto;font-size:11.5px" data-action="new-workout-plan" data-member="${m.id}">+ Add</button></div>
-          ${wp.length ? wp.map((p) => `<div style="border:1px solid var(--border-soft);border-radius:8px;padding:10px;margin-bottom:6px">
-              <div style="font-weight:600;font-size:12.5px">${esc(p.title)}</div>
-              <div style="font-size:11.5px;color:var(--muted)">${p.exercises.length} exercise${p.exercises.length === 1 ? '' : 's'}</div>
+          ${wp.length ? wp.map((p) => `<div style="border:1px solid var(--border-soft);border-radius:8px;padding:10px;margin-bottom:6px;display:flex;align-items:flex-start;gap:8px">
+              <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12.5px">${esc(p.title)}</div>
+              <div style="font-size:11.5px;color:var(--muted)">${p.exercises.length} exercise${p.exercises.length === 1 ? '' : 's'}</div></div>
+              <button class="btn-quiet" style="font-size:11.5px;color:var(--danger-fg)" data-action="delete-workout-plan" data-id="${p.id}" data-member="${m.id}">Remove</button>
             </div>`).join('') : `<div style="font-size:12px;color:var(--muted)">No plan yet.</div>`}
         </div>
         <div style="padding:0 16px 18px;display:grid;gap:8px">
@@ -2343,6 +2344,11 @@
       return;
     }
     kioskRoot.innerHTML = '';
+    // Kiosk check-ins/check-outs change data the page behind it may already
+    // be showing (Today's inside-now count and door feed, most visibly) -
+    // without this, exiting kiosk left staff staring at a stale dashboard
+    // until they navigated away and back.
+    renderPage(state.route);
   }
 
   async function renderKioskIdle() {
@@ -2466,6 +2472,7 @@
     else if (action === 'wizard-back') wizardBack();
     else if (action === 'wizard-submit') wizardSubmit();
     else if (action === 'new-workout-plan') openWorkoutPlanModal(Number(a.dataset.member));
+    else if (action === 'delete-workout-plan') deleteWorkoutPlan(Number(a.dataset.id), a);
     else if (action === 'open-kiosk-from-page') openKiosk();
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();
@@ -2551,6 +2558,21 @@
     try {
       await withBusy(btnEl, () => api(`/members/${id}/unfreeze`, { method: 'POST' }));
       toast('Membership unfrozen — access restored.', 'success');
+      renderPage(state.route);
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function deleteWorkoutPlan(id, btnEl) {
+    // DELETE /api/workout-plans/:id already existed server-side (soft
+    // deactivate) but nothing in the UI ever called it - once assigned, a
+    // workout plan had no remove affordance at all.
+    const ok = await confirmDialog({
+      title: 'Remove this workout plan?', confirmLabel: 'Remove plan',
+      body: 'The member will no longer see this plan. This cannot be undone from here.',
+    });
+    if (!ok) return;
+    try {
+      await withBusy(btnEl, () => api(`/workout-plans/${id}`, { method: 'DELETE' }));
+      toast('Workout plan removed.', 'success');
       renderPage(state.route);
     } catch (err) { toast(err.message, 'error'); }
   }

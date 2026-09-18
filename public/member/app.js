@@ -175,7 +175,7 @@
       rows.forEach((r) => {
         const row = el(`<div class="class-row">
           <div style="flex:1"><div class="name">${esc(r.name)}</div><div class="meta">${esc(r.coach || '')} · ${new Date(r.at).toLocaleString('en-US', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</div></div>
-          <button class="book-btn ${r.booked ? 'booked' : ''}" data-session="${r.id}" ${r.booked ? 'disabled' : ''}>${r.booked ? 'Booked' : r.spotsLeft > 0 ? 'Book' : 'Waitlist'}</button>
+          <button class="book-btn ${r.booked || r.waitlisted ? 'booked' : ''}" data-session="${r.id}" ${r.booked || r.waitlisted ? 'disabled' : ''}>${r.booked ? 'Booked' : r.waitlisted ? 'Waitlisted' : r.spotsLeft > 0 ? 'Book' : 'Waitlist'}</button>
         </div>`);
         card.appendChild(row);
       });
