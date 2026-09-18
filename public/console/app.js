@@ -152,6 +152,8 @@
     'settings-passes': 'Deactivated walk-in day pass types',
   };
 
+  const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
   function allowedFor(role) {
     const out = [];
     NAV.forEach((g) => g.items.forEach((it) => {
@@ -2335,50 +2337,63 @@
 
   function openWorkoutPlanModal(memberId) {
     modalRoot.innerHTML = '';
-    const exercises = [{ name: '', sets: 3, reps: '10', weightNote: '' }];
-    function renderExRows() {
-      return exercises.map((ex, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px" data-ex-row="${i}">
-        <input placeholder="Exercise" value="${esc(ex.name)}" data-ex-field="name">
-        <input placeholder="Sets" value="${esc(ex.sets)}" data-ex-field="sets">
-        <input placeholder="Reps" value="${esc(ex.reps)}" data-ex-field="reps">
-        <input placeholder="Weight" value="${esc(ex.weightNote)}" data-ex-field="weightNote">
-        <button type="button" class="btn-outline btn-sm" data-remove-ex="${i}">×</button>
-      </div>`).join('');
+    // One array of exercises per weekday, Monday first - a day left empty
+    // is simply a rest day, no separate "off" flag needed.
+    const days = WEEKDAY_NAMES.map(() => []);
+
+    function renderDaySection(dayIdx) {
+      const rows = days[dayIdx];
+      return `<div style="margin-bottom:16px" data-day-section="${dayIdx}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em">${WEEKDAY_NAMES[dayIdx]}</div>
+          <button type="button" class="btn-quiet" style="margin-left:auto;font-size:11.5px" data-add-ex="${dayIdx}">+ Add exercise</button>
+        </div>
+        ${rows.length ? rows.map((ex, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px" data-day="${dayIdx}" data-ex-row="${i}">
+            <input placeholder="Exercise" value="${esc(ex.name)}" data-ex-field="name">
+            <input placeholder="Sets" value="${esc(ex.sets)}" data-ex-field="sets">
+            <input placeholder="Reps" value="${esc(ex.reps)}" data-ex-field="reps">
+            <input placeholder="Weight" value="${esc(ex.weightNote)}" data-ex-field="weightNote">
+            <button type="button" class="btn-outline btn-sm" data-remove-ex data-day="${dayIdx}" data-idx="${i}">×</button>
+          </div>`).join('') : `<div style="font-size:11.5px;color:var(--muted);padding:4px 0 2px">Rest day</div>`}
+      </div>`;
     }
-    const overlay = el(`<div class="modal-overlay" id="wp-overlay"><div class="modal">
+    const overlay = el(`<div class="modal-overlay" id="wp-overlay"><div class="modal" style="max-width:580px">
       <div class="modal-header"><div><h2>New workout plan</h2><p>Assigned by ${esc(state.staff.name)}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
-      <div class="modal-body">
-        <label class="field" style="margin-bottom:12px">Title<input id="wp-title" placeholder="e.g. Strength Foundations — Week 1"></label>
-        <div id="wp-rows">${renderExRows()}</div>
-        <button type="button" class="btn-quiet" id="wp-add-row" style="margin-top:6px">+ Add exercise</button>
+      <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+        <label class="field" style="margin-bottom:14px">Title<input id="wp-title" placeholder="e.g. Strength Foundations — Week 1"></label>
+        <div id="wp-days">${days.map((_, i) => renderDaySection(i)).join('')}</div>
         <div id="wp-error" class="login-error hidden" style="margin-top:12px"></div>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" style="margin-left:auto" data-action="submit-workout-plan">Save plan</button></div>
     </div></div>`);
     modalRoot.appendChild(overlay);
 
-    function bindRows() {
-      const rows = document.getElementById('wp-rows');
-      rows.innerHTML = renderExRows();
-      rows.querySelectorAll('[data-ex-field]').forEach((input) => {
-        const idx = Number(input.closest('[data-ex-row]').dataset.exRow);
-        input.addEventListener('input', (e) => { exercises[idx][input.dataset.exField] = e.target.value; });
+    function bindDays() {
+      const root = document.getElementById('wp-days');
+      root.innerHTML = days.map((_, i) => renderDaySection(i)).join('');
+      root.querySelectorAll('[data-ex-field]').forEach((input) => {
+        const row = input.closest('[data-ex-row]');
+        input.addEventListener('input', (e) => { days[Number(row.dataset.day)][Number(row.dataset.exRow)][input.dataset.exField] = e.target.value; });
       });
-      rows.querySelectorAll('[data-remove-ex]').forEach((b) => b.addEventListener('click', () => {
-        exercises.splice(Number(b.dataset.removeEx), 1);
-        bindRows();
+      root.querySelectorAll('[data-remove-ex]').forEach((b) => b.addEventListener('click', () => {
+        days[Number(b.dataset.day)].splice(Number(b.dataset.idx), 1);
+        bindDays();
+      }));
+      root.querySelectorAll('[data-add-ex]').forEach((b) => b.addEventListener('click', () => {
+        days[Number(b.dataset.addEx)].push({ name: '', sets: 3, reps: '10', weightNote: '' });
+        bindDays();
       }));
     }
-    bindRows();
-    document.getElementById('wp-add-row').addEventListener('click', () => { exercises.push({ name: '', sets: 3, reps: '10', weightNote: '' }); bindRows(); });
+    bindDays();
     const wpSubmitBtn = overlay.querySelector('[data-action="submit-workout-plan"]');
     wpSubmitBtn.addEventListener('click', async () => {
       const titleEl = document.getElementById('wp-title');
       const title = titleEl.value.trim();
       const errBox = document.getElementById('wp-error');
       if (!title) { markInvalid(titleEl, 'Title is required.'); return; }
+      const exercises = days.flatMap((rows, dayOfWeek) => rows.filter((e) => e.name.trim()).map((e) => ({ ...e, dayOfWeek })));
       try {
-        await withBusy(wpSubmitBtn, () => api('/workout-plans', { method: 'POST', body: { memberId, title, exercises: exercises.filter((e) => e.name.trim()) } }));
+        await withBusy(wpSubmitBtn, () => api('/workout-plans', { method: 'POST', body: { memberId, title, exercises } }));
         closeModal();
         toast('Workout plan saved.', 'success');
         if (state.route === 'members') renderPage('members');
