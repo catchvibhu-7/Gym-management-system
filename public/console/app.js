@@ -2808,6 +2808,9 @@
 
   // ---------- Kiosk ----------
   const kioskRoot = document.getElementById('kiosk-root');
+  let cameraOn = false;
+  let cameraDevices = [];
+  let cameraDeviceIndex = 0;
   async function openKiosk() {
     await renderKioskIdle();
   }
@@ -2841,15 +2844,14 @@
       </div>
       <div class="kiosk-mid">
         <div style="text-align:center;max-width:480px;width:100%">
-          <div id="kiosk-camera-wrap" style="margin:0 auto 16px"></div>
-          <div class="qr-swatch" id="kiosk-qr-swatch" style="width:150px;height:150px;margin:0 auto 24px"></div>
+          <div class="qr-swatch" id="kiosk-camera-box" style="width:220px;height:220px;margin:0 auto 16px"></div>
+          <div style="margin-bottom:20px">
+            <button class="btn-outline" id="kiosk-camera-toggle" style="background:transparent;border-color:#33382f;color:#c9cdc4">Turn camera off</button>
+            <button class="btn-outline hidden" id="kiosk-camera-switch" style="background:transparent;border-color:#33382f;color:#c9cdc4">Switch camera</button>
+          </div>
           <h2 style="font-family:'Archivo Black',sans-serif;font-size:30px;letter-spacing:-1px;margin:0">Scan your code or tap your fob</h2>
           <p style="margin:12px 0 20px;font-size:14px;color:var(--muted-2);line-height:1.55">Type or scan the code, then press Enter.</p>
           <input id="kiosk-scan-input" autofocus placeholder="Scan code…" style="width:100%;text-align:center;font-size:16px;padding:14px;border-radius:10px;border:1px solid #33382f;background:#16180f;color:#fff">
-          <div style="margin-top:12px">
-            <button class="btn-outline" id="kiosk-camera-toggle" style="background:transparent;border-color:#33382f;color:#c9cdc4">Use camera instead</button>
-            <button class="btn-outline hidden" id="kiosk-camera-stop" style="background:transparent;border-color:#33382f;color:#c9cdc4">Stop camera</button>
-          </div>
           <div id="kiosk-error" style="margin-top:14px;color:#ff8a80;font-size:13px"></div>
           <div style="margin-top:22px;border-top:1px solid #23261f;padding-top:18px">
             <div style="font-size:11.5px;color:var(--muted-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Or check in manually</div>
@@ -2874,8 +2876,13 @@
       if (e.key !== 'Enter' || !input.value.trim()) return;
       await doScan(input.value.trim());
     });
-    document.getElementById('kiosk-camera-toggle').addEventListener('click', startCameraScan);
-    document.getElementById('kiosk-camera-stop').addEventListener('click', stopCameraScan);
+    document.getElementById('kiosk-camera-toggle').addEventListener('click', () => {
+      if (cameraOn) stopCameraScan(); else startCameraScan();
+    });
+    document.getElementById('kiosk-camera-switch').addEventListener('click', switchCamera);
+    // Front camera on by default - a kiosk tablet usually faces the member,
+    // not the door, so this is the useful default (auto-start, no click).
+    startCameraScan();
 
     const searchInput = document.getElementById('kiosk-member-search');
     let searchTimer;
@@ -2902,10 +2909,24 @@
   // dependency on the native BarcodeDetector API) so this works on any
   // browser that supports getUserMedia + canvas - BarcodeDetector alone
   // is missing on desktop Chrome/Firefox/Safari, which is why the first
-  // version of this feature reported "not supported" there.
-  async function startCameraScan() {
+  // version of this feature reported "not supported" there. The camera is
+  // on by default (front-facing) as soon as the idle screen renders - the
+  // box that used to be a static decorative QR swatch IS the live preview
+  // now, not a separate element next to it.
+  async function refreshCameraDeviceList() {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      cameraDevices = all.filter((d) => d.kind === 'videoinput');
+    } catch (e) { cameraDevices = []; }
+    const switchBtn = document.getElementById('kiosk-camera-switch');
+    if (switchBtn) switchBtn.classList.toggle('hidden', cameraDevices.length < 2);
+  }
+  async function startCameraScan(deviceId) {
     const errBox = document.getElementById('kiosk-error');
+    const box = document.getElementById('kiosk-camera-box');
+    const toggle = document.getElementById('kiosk-camera-toggle');
     if (errBox) errBox.textContent = '';
+    if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
     if (typeof window.jsQR === 'undefined') {
       if (errBox) errBox.textContent = 'Camera scanning failed to load. Use a barcode scanner or search below.';
       return;
@@ -2914,19 +2935,24 @@
       if (errBox) errBox.textContent = 'Camera access needs a secure connection (HTTPS) or localhost on this device.';
       return;
     }
-    const wrap = document.getElementById('kiosk-camera-wrap');
-    const swatch = document.getElementById('kiosk-qr-swatch');
     const video = document.createElement('video');
     video.autoplay = true; video.playsInline = true; video.muted = true;
-    video.style.cssText = 'width:220px;height:220px;object-fit:cover;border-radius:12px;background:#000';
-    wrap.innerHTML = ''; wrap.appendChild(video);
-    if (swatch) swatch.classList.add('hidden');
-    document.getElementById('kiosk-camera-toggle').classList.add('hidden');
-    document.getElementById('kiosk-camera-stop').classList.remove('hidden');
+    if (box) { box.innerHTML = ''; box.appendChild(video); box.classList.add('qr-swatch--live'); }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const constraints = deviceId
+        ? { video: { deviceId: { exact: deviceId } } }
+        : { video: { facingMode: { ideal: 'user' } } };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      cameraOn = true;
+      if (toggle) toggle.textContent = 'Turn camera off';
       video.srcObject = stream;
       await video.play().catch(() => {});
+      await refreshCameraDeviceList();
+      const settings = stream.getVideoTracks()[0] && stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
+      if (settings.deviceId) {
+        const idx = cameraDevices.findIndex((d) => d.deviceId === settings.deviceId);
+        if (idx >= 0) cameraDeviceIndex = idx;
+      }
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       let scanning = true;
@@ -2949,20 +2975,25 @@
         }
       })();
     } catch (err) {
+      cameraOn = false;
+      if (box) { box.innerHTML = ''; box.classList.remove('qr-swatch--live'); }
+      if (toggle) toggle.textContent = 'Turn camera on';
       if (errBox) errBox.textContent = err.name === 'NotAllowedError' ? 'Camera permission was denied.' : (err.message || 'Could not access the camera.');
-      stopCameraScan();
     }
   }
   function stopCameraScan() {
     if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
-    const wrap = document.getElementById('kiosk-camera-wrap');
-    const swatch = document.getElementById('kiosk-qr-swatch');
+    cameraOn = false;
+    const box = document.getElementById('kiosk-camera-box');
     const toggle = document.getElementById('kiosk-camera-toggle');
-    const stop = document.getElementById('kiosk-camera-stop');
-    if (wrap) wrap.innerHTML = '';
-    if (swatch) swatch.classList.remove('hidden');
-    if (toggle) toggle.classList.remove('hidden');
-    if (stop) stop.classList.add('hidden');
+    if (box) { box.innerHTML = ''; box.classList.remove('qr-swatch--live'); }
+    if (toggle) toggle.textContent = 'Turn camera on';
+  }
+  async function switchCamera() {
+    if (cameraDevices.length < 2) await refreshCameraDeviceList();
+    if (cameraDevices.length < 2) return;
+    cameraDeviceIndex = (cameraDeviceIndex + 1) % cameraDevices.length;
+    await startCameraScan(cameraDevices[cameraDeviceIndex].deviceId);
   }
 
   async function doScanByMemberId(memberId) {
