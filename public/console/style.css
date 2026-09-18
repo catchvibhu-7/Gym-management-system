@@ -61,8 +61,12 @@ h1, h2, h3 { font-family: 'Archivo Black', sans-serif; letter-spacing: -0.3px; m
 }
 .brand:hover { background: var(--dark-2); }
 .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; font-family: 'Archivo Black', sans-serif; font-size: 14px; color: #fff; flex: none; }
-.brand-name { font-family: 'Archivo Black', sans-serif; font-size: 13px; letter-spacing: -0.2px; line-height: 1.1; }
-.brand-sub { font-size: 10px; color: var(--muted-2); letter-spacing: 0.06em; text-transform: uppercase; }
+/* Archivo Black is an ultra-bold display face - at a small size with tight
+   tracking its strokes crowd together and read as a grey smudge rather
+   than crisp letters, which is what made the gym name hard to read. A
+   larger size, looser (not negative) tracking, and pure white fix it. */
+.brand-name { font-family: 'Archivo Black', sans-serif; font-size: 15px; letter-spacing: 0.1px; line-height: 1.25; color: #fff; }
+.brand-sub { font-size: 10.5px; color: var(--muted-2); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 1px; }
 
 /* Sidebar: a flat, static list of section cards - nothing here ever
    expands, collapses, or changes on hover. Each card is a real nav link
@@ -278,7 +282,7 @@ table.data-table th.sortable.active .sort-arrow { opacity: 1; color: var(--accen
     padding: 10px 16px; position: sticky; top: 0; z-index: 60;
   }
   .mobile-brand { display: flex; align-items: center; gap: 8px; border: none; background: none; color: inherit; padding: 0; cursor: pointer; }
-  .mobile-brand span { font-family: 'Archivo Black', sans-serif; font-size: 13px; letter-spacing: -0.2px; }
+  .mobile-brand span { font-family: 'Archivo Black', sans-serif; font-size: 15px; letter-spacing: 0.1px; color: #fff; }
 
   .menu-toggle {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;

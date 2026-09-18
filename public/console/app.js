@@ -296,6 +296,21 @@
       document.getElementById('brand-sub-label').textContent = settings.gym_tagline;
       document.getElementById('mobile-brand-name').textContent = settings.gym_name.toUpperCase();
       document.title = `${settings.gym_name} — Owner Console`;
+      // index.html declares no <link rel="icon"> at all, so a custom
+      // favicon has to be created (not just updated) the first time one is
+      // uploaded; the cache-busting query string forces the browser tab to
+      // pick up a just-changed image instead of keeping the old one.
+      let iconLink = document.querySelector('link[rel="icon"]');
+      if (settings.favicon_url) {
+        if (!iconLink) {
+          iconLink = document.createElement('link');
+          iconLink.rel = 'icon';
+          document.head.appendChild(iconLink);
+        }
+        iconLink.href = `${settings.favicon_url}?v=${Date.now()}`;
+      } else if (iconLink) {
+        iconLink.remove();
+      }
       // The sidebar's first render (from showApp(), before this fetch
       // resolves) can't know nav_order yet - re-render once it's in.
       renderNav();
@@ -1168,10 +1183,21 @@
     pageRoot.innerHTML = '';
     pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:14px">Gym profile</h2>
-      <div class="grid-2">
+      <div class="grid-2" style="margin-bottom:16px">
         <label class="field">Gym name<input id="set-gym-name" value="${esc(settings.gym_name)}"></label>
         <label class="field">Tagline<input id="set-gym-tagline" value="${esc(settings.gym_tagline)}"></label>
       </div>
+      <div class="admin-field-label" style="font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:8px">Favicon</div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div id="favicon-preview" style="width:36px;height:36px;border-radius:8px;border:1px solid var(--border-soft);display:grid;place-items:center;overflow:hidden;background:#fff">
+          ${settings.favicon_url ? `<img src="${esc(settings.favicon_url)}?v=${Date.now()}" style="width:100%;height:100%;object-fit:contain">` : `<span style="font-size:10px;color:var(--muted)">None</span>`}
+        </div>
+        <input type="file" id="favicon-file-input" accept="image/png,image/x-icon,image/vnd.microsoft.icon,image/svg+xml,image/jpeg" class="hidden">
+        <button type="button" class="btn-outline btn-sm" data-action="choose-favicon">Upload image</button>
+        ${settings.favicon_url ? `<button type="button" class="btn-outline btn-sm" data-action="remove-favicon">Remove</button>` : ''}
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:6px">PNG, ICO, SVG, or JPEG — 300KB max. Shown as the browser tab icon.</p>
+      <div id="favicon-error" class="login-error hidden" style="margin-top:10px"></div>
     </section>`));
     pageRoot.appendChild(el(`<section class="card card-pad">
       <h2 style="font-size:14.5px;margin-bottom:14px">Currency &amp; tax</h2>
@@ -1234,6 +1260,41 @@
     document.getElementById('set-currency-code').addEventListener('change', (e) => {
       const match = CURRENCIES.find(([code]) => code === e.target.value);
       if (match) document.getElementById('set-currency-symbol').value = match[1];
+    });
+
+    document.getElementById('favicon-file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const errBox = document.getElementById('favicon-error');
+      errBox.classList.add('hidden');
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Could not read that file.'));
+          reader.readAsDataURL(file);
+        });
+        await api('/settings/favicon', { method: 'POST', body: { dataUrl } });
+        toast('Favicon updated.', 'success');
+        applyBranding();
+        renderPage('settings-general');
+      } catch (err) {
+        errBox.textContent = err.message; errBox.classList.remove('hidden');
+      }
+    });
+    document.querySelector('[data-action="choose-favicon"]').addEventListener('click', () => {
+      document.getElementById('favicon-file-input').click();
+    });
+    const removeFaviconBtn = document.querySelector('[data-action="remove-favicon"]');
+    if (removeFaviconBtn) removeFaviconBtn.addEventListener('click', async () => {
+      try {
+        await withBusy(removeFaviconBtn, () => api('/settings/favicon', { method: 'DELETE' }));
+        toast('Favicon removed.', 'success');
+        applyBranding();
+        renderPage('settings-general');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
     });
   }
 

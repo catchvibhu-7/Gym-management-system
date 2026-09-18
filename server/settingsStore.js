@@ -23,6 +23,7 @@ const DEFAULTS = {
   admission_fee_cents: '0',
   admission_perks_days: '30',
   nav_order: '',
+  favicon_key: '',
 };
 
 // Never echoed back to the client once saved - PATCH accepts a new value,
@@ -48,6 +49,9 @@ function getPublic() {
   for (const [k, v] of Object.entries(all)) {
     out[k] = SECRET_KEYS.has(k) ? (v ? '••••••••' : '') : v;
   }
+  // Derived, not stored directly - favicon_key is a storage.js key, this is
+  // the actual URL the browser tab icon can point at.
+  out.favicon_url = all.favicon_key ? `/uploads/${all.favicon_key}` : null;
   return out;
 }
 

@@ -20,7 +20,12 @@ const app = express();
 // signature check against the original body.
 app.post('/api/payments/razorpay/webhook', express.raw({ type: 'application/json' }), paymentsRoutes.handleRazorpayWebhook);
 
-app.use(express.json());
+// Default 100kb is plenty for every other JSON body this app sends, but a
+// favicon upload (POST /api/settings/favicon) arrives as a base64 data URL
+// - inflates a small image well past that default, so it's raised globally
+// rather than juggling a second per-route parser after this one has already
+// rejected an oversized body.
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
 app.use('/uploads', express.static(UPLOADS_DIR, { maxAge: '1d' }));
