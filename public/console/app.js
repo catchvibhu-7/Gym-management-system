@@ -675,8 +675,11 @@
       document.getElementById('member-detail').innerHTML = `
         <div style="padding:18px 20px;background:var(--dark);color:#fff">
           <div class="avatar" style="width:44px;height:44px;background:var(--accent);color:#fff;font-size:15px;margin-bottom:10px">${esc(m.initials)}</div>
-          <div style="font-family:'Archivo Black',sans-serif;font-size:18px">${esc(m.name)}</div>
-          <div style="font-size:11.5px;color:var(--muted-2);margin-top:2px">${esc(m.plan)} · joined ${esc(m.joined)}</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="font-family:'Archivo Black',sans-serif;font-size:18px">${esc(m.name)}</div>
+            <span class="chip" style="background:var(--accent-soft);color:var(--accent-dark);font-size:10.5px">${esc(m.plan)}</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--muted-2);margin-top:4px">joined ${esc(m.joined)}</div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--border-soft)">
           <div style="padding:12px 16px;border-right:1px solid var(--border-soft)"><div style="font-size:10.5px;color:var(--muted);text-transform:uppercase">Visits/30d</div><div style="font-family:'Archivo Black',sans-serif;font-size:20px">${m.visits}</div></div>
@@ -703,6 +706,8 @@
             </div>`).join('') : `<div style="font-size:12px;color:var(--muted)">No plan yet.</div>`}
         </div>
         <div style="padding:0 16px 18px;display:grid;gap:8px">
+          ${m.isPastDue ? `<button class="btn btn-primary" data-action="bill-now" data-member="${m.id}">Bill now (past due)</button>` : ''}
+          ${m.hasMembership ? `<button class="btn btn-outline" data-action="open-extend-modal" data-member="${m.id}">Extend membership</button>` : ''}
           <button class="btn btn-outline" data-action="edit-member">Edit details</button>
           <button class="btn btn-outline" data-action="open-access-modal">Manage access</button>
           <button class="btn btn-outline" data-action="send-reminder" data-member="${m.id}">Send reminder</button>
@@ -3222,7 +3227,7 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
-    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'daypass-qr-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay', 'checkout-overlay', 'facility-overlay', 'pt-session-overlay'];
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'daypass-qr-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay', 'checkout-overlay', 'facility-overlay', 'pt-session-overlay', 'extend-overlay'];
     if (!a) {
       if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;
@@ -3252,6 +3257,9 @@
     }
     else if (action === 'freeze-member') freezeMember(Number(a.dataset.member), a);
     else if (action === 'unfreeze-member') unfreezeMember(Number(a.dataset.member), a);
+    else if (action === 'bill-now') billNow(Number(a.dataset.member), a);
+    else if (action === 'open-extend-modal') openExtendModal(Number(a.dataset.member));
+    else if (action === 'confirm-extend') confirmExtend(Number(a.dataset.member), a);
     else if (action === 'send-reminder') sendReminder(Number(a.dataset.member), a);
     else if (action === 'settle-invoice') settleInvoice(Number(a.dataset.id), a);
     else if (action === 'toggle-automation') toggleAutomation(Number(a.dataset.id));
@@ -3370,6 +3378,43 @@
           renderPage(state.route);
         },
       });
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function billNow(memberId, btnEl) {
+    try {
+      const { invoiceId } = await withBusy(btnEl, () => api(`/billing/members/${memberId}/bill-now`, { method: 'POST' }));
+      await settleInvoice(invoiceId);
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  function openExtendModal(memberId) {
+    const m = state.members.detailCache;
+    if (!m) return;
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="extend-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Extend membership</h2><p>${esc(m.name)}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;line-height:1.6">Pushes the next charge date out with no charge - for a comp, a gym closure, or any other goodwill extension. To actually collect a payment instead, use "Bill now" on a past-due member.</p>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <input type="number" id="extend-amount" min="1" value="7" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border-soft)">
+          <select id="extend-unit" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--border-soft)">
+            <option value="days">Days</option>
+            <option value="weeks">Weeks</option>
+            <option value="months">Months</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" style="width:100%" data-action="confirm-extend" data-member="${memberId}">Extend</button>
+      </div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+  async function confirmExtend(memberId, btnEl) {
+    const amount = Number(document.getElementById('extend-amount').value);
+    const unit = document.getElementById('extend-unit').value;
+    try {
+      const r = await withBusy(btnEl, () => api(`/members/${memberId}/membership/extend`, { method: 'POST', body: { amount, unit } }));
+      toast(`Next charge moved to ${r.nextChargeDate}.`, 'success');
+      closeModal();
+      renderPage(state.route);
     } catch (err) { toast(err.message, 'error'); }
   }
   async function toggleAutomation(id) {

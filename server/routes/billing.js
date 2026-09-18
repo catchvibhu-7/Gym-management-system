@@ -1,10 +1,26 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff } = require('../auth');
-const { money, initialsOf, monthlyEquivalentCents } = require('../utils');
+const { money, initialsOf, monthlyEquivalentCents, periodInfo } = require('../utils');
 
 const router = express.Router();
 router.use(requireStaff());
+
+// Paying off a membership-cycle invoice (one with membership_id set - an
+// admission/fob-fee/plan-purchase invoice never has this) should roll the
+// membership's own due date forward by one billing period, same as any
+// real recurring-billing system - nothing did this before, so a member's
+// "next charge" date used to just sit there unchanged even after they paid.
+// Only rolls forward if this invoice actually covers the CURRENT due date
+// (an old already-superseded invoice being paid late shouldn't push a
+// since-advanced date out even further).
+function advanceMembershipCycle(invoice) {
+  if (!invoice.membership_id) return;
+  const membership = db.prepare('SELECT * FROM memberships WHERE id = ?').get(invoice.membership_id);
+  if (!membership || invoice.due_date < membership.next_charge_date) return;
+  db.prepare('UPDATE memberships SET next_charge_date = date(next_charge_date, ?) WHERE id = ?')
+    .run(periodInfo(membership.billing_period).dateModifier, membership.id);
+}
 
 function chip(status) {
   const map = {
@@ -90,7 +106,30 @@ router.post('/invoices/:id/settle-cash', (req, res) => {
     `UPDATE invoices SET status = 'paid', attempted_at = datetime('now'), paid_at = datetime('now'), payment_method = 'cash', retry_count = retry_count + 1 WHERE id = ?`
   ).run(invoice.id);
   db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
+  advanceMembershipCycle(invoice);
   res.json({ ok: true });
+});
+
+// "Bill now" from a member's own card: either hands back an invoice that's
+// already sitting there unpaid (never double-bills), or - since nothing in
+// this app generates the next cycle's invoice automatically - creates one
+// for the current due date so there's something to actually collect
+// payment against via the normal settle flow (cash here, or Razorpay).
+router.post('/members/:id/bill-now', (req, res) => {
+  const membership = db.prepare(
+    `SELECT * FROM memberships WHERE member_id = ? AND status != 'cancelled' ORDER BY id DESC LIMIT 1`
+  ).get(req.params.id);
+  if (!membership) return res.status(404).json({ error: 'No membership to bill.' });
+  let invoice = db.prepare(
+    `SELECT * FROM invoices WHERE membership_id = ? AND status IN ('pending','failed') ORDER BY id DESC LIMIT 1`
+  ).get(membership.id);
+  if (!invoice) {
+    const id = db.prepare(
+      `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, status) VALUES (?,?,?,?, 'pending')`
+    ).run(req.params.id, membership.id, membership.monthly_price_cents, membership.next_charge_date).lastInsertRowid;
+    invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+  }
+  res.json({ invoiceId: invoice.id });
 });
 
 module.exports = router;

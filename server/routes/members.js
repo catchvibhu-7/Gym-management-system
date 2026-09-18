@@ -1,7 +1,7 @@
 const express = require('express');
 const { db } = require('../db');
 const { requireStaff, hashPassword } = require('../auth');
-const { money, initialsOf, newCode, periodInfo } = require('../utils');
+const { money, initialsOf, newCode, periodInfo, todayISO } = require('../utils');
 const settingsStore = require('../settingsStore');
 const { sendQrSvg } = require('../qr');
 
@@ -94,6 +94,8 @@ router.get('/:id', (req, res) => {
     qrCode: m.qr_code, fobCode: m.fob_code, qrSuspended: !!m.qr_suspended, fobSuspended: !!m.fob_suspended,
     fobFeePaid: !!m.fob_fee_paid, admissionFeePaid: !!m.admission_fee_paid, perksUntil: m.perks_until,
     trialEndsAt: m.trial_ends_at,
+    hasMembership: !!membership,
+    isPastDue: !!membership && membership.next_charge_date < todayISO(),
   });
 });
 
@@ -224,6 +226,28 @@ router.post('/:id/unfreeze', (req, res) => {
     `UPDATE members SET status = 'active', access_method = ?, pre_freeze_access_method = NULL WHERE id = ?`
   ).run(restoredAccess, member.id);
   res.json({ ok: true });
+});
+
+// A no-charge push of the next billing date - goodwill for a gym closure,
+// a service issue, a referral bonus, etc. - available any time, unlike
+// "Bill now" (billing.js) which only makes sense once a cycle is actually
+// due. Also clears past_due, since staff deliberately moving the date out
+// means it's no longer overdue by definition.
+router.post('/:id/membership/extend', (req, res) => {
+  const membership = db.prepare(
+    `SELECT * FROM memberships WHERE member_id = ? AND status != 'cancelled' ORDER BY id DESC LIMIT 1`
+  ).get(req.params.id);
+  if (!membership) return res.status(404).json({ error: 'No membership to extend.' });
+  const amount = parseInt(req.body?.amount, 10);
+  const unit = req.body?.unit;
+  if (!amount || amount <= 0 || !['days', 'weeks', 'months'].includes(unit)) {
+    return res.status(400).json({ error: 'Enter a valid amount and unit.' });
+  }
+  db.prepare(`UPDATE memberships SET next_charge_date = date(next_charge_date, ?) WHERE id = ?`)
+    .run(`+${amount} ${unit}`, membership.id);
+  db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(req.params.id);
+  const updated = db.prepare('SELECT next_charge_date FROM memberships WHERE id = ?').get(membership.id);
+  res.json({ ok: true, nextChargeDate: updated.next_charge_date });
 });
 
 router.post('/:id/reminder', (req, res) => {

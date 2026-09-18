@@ -3,6 +3,18 @@ const { db } = require('../db');
 const { requireStaff } = require('../auth');
 const settingsStore = require('../settingsStore');
 const razorpay = require('../payments/razorpay');
+const { periodInfo } = require('../utils');
+
+// Mirrors billing.js's advanceMembershipCycle - paying off a membership-
+// cycle invoice (membership_id set) rolls the membership's next_charge_date
+// forward by one billing period, same as the cash-settle path does.
+function advanceMembershipCycle(invoice) {
+  if (!invoice.membership_id) return;
+  const membership = db.prepare('SELECT * FROM memberships WHERE id = ?').get(invoice.membership_id);
+  if (!membership || invoice.due_date < membership.next_charge_date) return;
+  db.prepare('UPDATE memberships SET next_charge_date = date(next_charge_date, ?) WHERE id = ?')
+    .run(periodInfo(membership.billing_period).dateModifier, membership.id);
+}
 
 const router = express.Router();
 
@@ -88,6 +100,7 @@ router.post('/razorpay/verify', requireStaff(), (req, res) => {
     `UPDATE invoices SET status = 'paid', paid_at = datetime('now'), gateway_payment_id = ?, payment_method = 'razorpay' WHERE id = ?`
   ).run(paymentId, invoice.id);
   db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
+  advanceMembershipCycle(invoice);
   res.json({ ok: true });
 });
 
@@ -118,6 +131,7 @@ function handleRazorpayWebhook(req, res) {
           `UPDATE invoices SET status = 'paid', paid_at = datetime('now'), gateway_payment_id = ?, payment_method = 'razorpay' WHERE id = ?`
         ).run(payment.id, invoice.id);
         db.prepare(`UPDATE members SET status = 'active' WHERE id = ? AND status = 'past_due'`).run(invoice.member_id);
+        advanceMembershipCycle(invoice);
       }
     }
   }
