@@ -99,7 +99,7 @@ router.post('/classes/:sessionId/book', (req, res) => {
 function loadPlan(id) {
   const plan = db.prepare('SELECT * FROM workout_plans WHERE id = ?').get(id);
   if (!plan) return null;
-  const exercises = db.prepare('SELECT * FROM workout_plan_exercises WHERE plan_id = ? ORDER BY sort_order').all(id);
+  const exercises = db.prepare('SELECT * FROM workout_plan_exercises WHERE plan_id = ? ORDER BY week_number, sort_order').all(id);
   return { ...plan, exercises };
 }
 
@@ -143,6 +143,39 @@ router.delete('/workout-plans/:id', (req, res) => {
   if (!plan) return res.status(404).json({ error: 'Not found' });
   db.prepare('UPDATE workout_plans SET active = 0 WHERE id = ?').run(plan.id);
   res.json({ ok: true });
+});
+
+// A member can browse the owner's free universal plans, or build their
+// own (above) - paid plans are never self-purchased here, only ever
+// assigned by staff (see POST /api/workout-plans/templates/:id/assign),
+// which is also where the real checkout for a paid plan happens.
+router.get('/workout-plan-templates', (req, res) => {
+  const templates = db.prepare(
+    `SELECT * FROM workout_plans WHERE is_template = 1 AND active = 1 AND visibility = 'universal' AND price_cents = 0 ORDER BY created_at DESC`
+  ).all();
+  res.json(templates.map((t) => ({
+    ...t, exerciseCount: db.prepare('SELECT COUNT(*) c FROM workout_plan_exercises WHERE plan_id = ?').get(t.id).c,
+  })));
+});
+
+router.post('/workout-plan-templates/:id/pick', (req, res) => {
+  const template = db.prepare(
+    `SELECT * FROM workout_plans WHERE id = ? AND is_template = 1 AND active = 1 AND visibility = 'universal' AND price_cents = 0`
+  ).get(req.params.id);
+  if (!template) return res.status(404).json({ error: 'Not found' });
+  const exercises = db.prepare('SELECT * FROM workout_plan_exercises WHERE plan_id = ? ORDER BY week_number, sort_order').all(template.id);
+  const planId = db.prepare(
+    `INSERT INTO workout_plans (member_id, created_by, title, notes, plan_type, source_template_id) VALUES (?, 'member', ?, ?, ?, ?)`
+  ).run(req.member.id, template.title, template.notes, template.plan_type, template.id).lastInsertRowid;
+  const insertEx = db.prepare(
+    `INSERT INTO workout_plan_exercises (plan_id, week_number, day_of_week, section, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  );
+  exercises.forEach((e) => insertEx.run(
+    planId, e.week_number, e.day_of_week, e.section, e.sort_order,
+    e.name, e.sets, e.reps, e.weight_note, e.rest_seconds, e.notes
+  ));
+  res.status(201).json(loadPlan(planId));
 });
 
 module.exports = router;

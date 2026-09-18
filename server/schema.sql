@@ -162,18 +162,24 @@ CREATE TABLE IF NOT EXISTS automations (
 
 CREATE TABLE IF NOT EXISTS workout_plans (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  member_id INTEGER REFERENCES members(id) ON DELETE CASCADE,
   created_by TEXT NOT NULL DEFAULT 'member' CHECK (created_by IN ('member','staff')),
   created_by_staff_id INTEGER REFERENCES staff(id),
   title TEXT NOT NULL,
   notes TEXT,
   active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  is_template INTEGER NOT NULL DEFAULT 0,
+  plan_type TEXT NOT NULL DEFAULT 'weekly' CHECK (plan_type IN ('weekly','monthly')),
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','trainer','universal')),
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  source_template_id INTEGER REFERENCES workout_plans(id)
 );
 
 CREATE TABLE IF NOT EXISTS workout_plan_exercises (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_id INTEGER NOT NULL REFERENCES workout_plans(id) ON DELETE CASCADE,
+  week_number INTEGER NOT NULL DEFAULT 1,
   day_of_week INTEGER NOT NULL DEFAULT 0,
   section TEXT NOT NULL DEFAULT 'workout' CHECK (section IN ('warmup','workout','stretch')),
   sort_order INTEGER NOT NULL DEFAULT 0,

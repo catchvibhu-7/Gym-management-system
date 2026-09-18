@@ -22,6 +22,11 @@
   }
 
   function money(v) { return v; }
+  // Unlike money() above (a passthrough for already-formatted strings the
+  // server sends), this formats a raw cents integer using the live
+  // currency symbol - for values that only ever arrive as cents, like a
+  // plan-library template's price_cents.
+  function formatCents(cents) { return `${settingsCache?.currency_symbol || '$'}${(cents / 100).toFixed(2)}`; }
   function el(html) { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -171,6 +176,7 @@
       { id: 'facilities', label: 'Facilities', roles: ['owner', 'manager'] },
       { id: 'team', label: 'Team', roles: ['owner', 'manager'] },
       { id: 'staff-attendance', label: 'Staff attendance', roles: DATA_STAFF_ROLES },
+      { id: 'plan-library', label: 'Plan library', roles: ['owner', 'manager', 'coach'] },
     ] },
     { group: 'Insights', items: [
       { id: 'reports', label: 'Reports', roles: ['owner', 'manager'] },
@@ -194,6 +200,7 @@
     'settings-general': 'Gym profile, currency and GST', 'settings-payments': 'Card/UPI processor configuration',
     'settings-notifications': 'SMS and email provider configuration', 'settings-backup': 'Download or restore your data',
     'settings-passes': 'Deactivated walk-in day pass types',
+    'plan-library': 'Reusable workout plans - trainer and universal',
   };
 
   const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -466,6 +473,7 @@
       'settings-notifications': pageSettingsNotifications, 'settings-backup': pageSettingsBackup,
       'settings-passes': pageSettingsPasses,
       'pt-sessions': pagePtSessions, facilities: pageFacilities, 'staff-attendance': pageStaffAttendance,
+      'plan-library': pagePlanLibrary,
     };
     (fns[route] || pageToday)().catch((err) => {
       pageRoot.innerHTML = `<div class="empty-state">${esc(err.message)}</div>`;
@@ -654,7 +662,8 @@
         </div>
         <div style="padding:0 16px 14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:10.5px;color:var(--muted);text-transform:uppercase">Workout plan</div>
-            <button class="btn-quiet" style="margin-left:auto;font-size:11.5px" data-action="new-workout-plan" data-member="${m.id}">+ Add</button></div>
+            <button class="btn-quiet" style="margin-left:auto;font-size:11.5px" data-action="open-plan-picker" data-member="${m.id}">+ From library</button>
+            <button class="btn-quiet" style="font-size:11.5px" data-action="new-workout-plan" data-member="${m.id}">+ Build one-off</button></div>
           ${wp.length ? wp.map((p) => `<div style="border:1px solid var(--border-soft);border-radius:8px;padding:10px;margin-bottom:6px;display:flex;align-items:flex-start;gap:8px">
               <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12.5px">${esc(p.title)}</div>
               <div style="font-size:11.5px;color:var(--muted)">${p.exercises.length} exercise${p.exercises.length === 1 ? '' : 's'}</div></div>
@@ -2552,6 +2561,214 @@
     });
   }
 
+  // ---------- Plan library (reusable trainer/universal templates) ----------
+  async function pagePlanLibrary() {
+    const isManager = ['owner', 'manager'].includes(state.staff.role);
+    setTopActions([el(`<button class="btn btn-primary" data-action="open-template-modal">+ Create plan</button>`)]);
+    const templates = await api('/workout-plans/templates');
+    state.templatesCache = templates;
+    pageRoot.innerHTML = '';
+    const universal = templates.filter((t) => t.visibility === 'universal');
+    const trainer = templates.filter((t) => t.visibility === 'trainer');
+
+    function cardHtml(t) {
+      const canRemove = isManager || t.created_by_staff_id === state.staff.id;
+      return `<div class="card card-pad">
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <span class="chip" style="background:var(--accent-soft);color:var(--accent-dark)">${t.plan_type === 'monthly' ? 'Monthly · 4 weeks' : 'Weekly'}</span>
+          <span class="chip" style="margin-left:auto;${t.price_cents ? 'background:var(--warn-bg,#fdecd8);color:var(--warn-fg,#b45309)' : 'background:var(--neutral-bg);color:var(--neutral-fg)'}">${t.price_cents ? formatCents(t.price_cents) : 'Free'}</span>
+        </div>
+        <div style="font-family:'Archivo Black',sans-serif;font-size:16px;margin:10px 0 4px">${esc(t.title)}</div>
+        ${t.trainerName ? `<div style="font-size:11.5px;color:var(--muted)">By ${esc(t.trainerName)}</div>` : ''}
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">${t.exerciseCount} exercise${t.exerciseCount === 1 ? '' : 's'}</div>
+        ${canRemove ? `<button class="btn-outline btn-sm" style="width:100%;margin-top:10px" data-action="delete-template" data-id="${t.id}">Remove</button>` : ''}
+      </div>`;
+    }
+    pageRoot.appendChild(el(`<section style="margin-bottom:20px">
+      <h2 style="font-size:14.5px;margin-bottom:12px">Universal plans <span style="font-weight:400;color:var(--muted);font-size:12px">— visible to everyone</span></h2>
+      <div class="grid-3">${universal.length ? universal.map(cardHtml).join('') : '<div class="empty-state">No universal plans yet.</div>'}</div>
+    </section>`));
+    pageRoot.appendChild(el(`<section>
+      <h2 style="font-size:14.5px;margin-bottom:12px">Trainer plans <span style="font-weight:400;color:var(--muted);font-size:12px">— only assignable by the trainer who made them</span></h2>
+      <div class="grid-3">${trainer.length ? trainer.map(cardHtml).join('') : '<div class="empty-state">No trainer plans yet.</div>'}</div>
+    </section>`));
+  }
+
+  async function deleteTemplate(id, btnEl) {
+    const ok = await confirmDialog({ title: 'Remove this plan?', confirmLabel: 'Remove', body: "Members who already have a copy of it keep theirs - this only removes it from the library." });
+    if (!ok) return;
+    try {
+      await withBusy(btnEl, () => api(`/workout-plans/templates/${id}`, { method: 'DELETE' }));
+      toast('Plan removed from the library.', 'success');
+      renderPage('plan-library');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  function openTemplateModal() {
+    modalRoot.innerHTML = '';
+    const isManager = ['owner', 'manager'].includes(state.staff.role);
+    let planType = 'weekly';
+    let activeWeek = 0;
+    // weeks[w][day] = {warmup:[],workout:[],stretch:[]} - only week 0 is
+    // used/sent for a weekly plan; all 4 are independent for a monthly one.
+    const weeks = Array.from({ length: 4 }, () => WEEKDAY_NAMES.map(() => ({ warmup: [], workout: [], stretch: [] })));
+
+    function renderDaySection(dayIdx) {
+      const buckets = weeks[activeWeek][dayIdx];
+      const isRestDay = WORKOUT_SECTIONS.every(([key]) => buckets[key].length === 0);
+      return `<div style="margin-bottom:18px" data-day-section="${dayIdx}">
+        <div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">${WEEKDAY_NAMES[dayIdx]}</div>
+        ${isRestDay ? `<div style="font-size:11.5px;color:var(--muted);padding:2px 0 2px">Rest day</div>` : ''}
+        ${WORKOUT_SECTIONS.map(([key, label]) => `<div style="margin:0 0 8px 10px" data-section-block="${key}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <div style="font-size:11px;font-weight:600;color:var(--muted)">${esc(label)}</div>
+            <button type="button" class="btn-quiet" style="margin-left:auto;font-size:11px" data-add-ex data-day="${dayIdx}" data-section="${key}">+ Add exercise</button>
+          </div>
+          ${buckets[key].map((ex, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px" data-day="${dayIdx}" data-section="${key}" data-ex-row="${i}">
+              <input placeholder="Exercise" value="${esc(ex.name)}" data-ex-field="name">
+              <input placeholder="Sets" value="${esc(ex.sets)}" data-ex-field="sets">
+              <input placeholder="Reps" value="${esc(ex.reps)}" data-ex-field="reps">
+              <input placeholder="Weight" value="${esc(ex.weightNote)}" data-ex-field="weightNote">
+              <button type="button" class="btn-outline btn-sm" data-remove-ex data-day="${dayIdx}" data-section="${key}" data-idx="${i}">×</button>
+            </div>`).join('')}
+        </div>`).join('')}
+      </div>`;
+    }
+
+    const overlay = el(`<div class="modal-overlay" id="template-overlay"><div class="modal" style="max-width:600px">
+      <div class="modal-header"><div><h2>Create a plan</h2><p>${isManager ? 'Universal plan - visible to every member and trainer' : `Trainer plan - only you can assign it`}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body" style="max-height:64vh;overflow-y:auto">
+        <label class="field" style="margin-bottom:12px">Title<input id="tpl-title" placeholder="e.g. Beginner Full Body"></label>
+        <div class="grid-2" style="margin-bottom:14px">
+          <label class="field">Plan length
+            <select id="tpl-plan-type">
+              <option value="weekly">Weekly (repeats every week)</option>
+              <option value="monthly">Monthly (4 separate weeks)</option>
+            </select>
+          </label>
+          ${isManager ? `<label class="field">Price (0 = free)<input id="tpl-price" type="number" min="0" step="0.01" placeholder="0.00"></label>` : ''}
+        </div>
+        <div id="tpl-week-tabs" class="hidden" style="display:flex;gap:6px;margin-bottom:14px"></div>
+        <div id="tpl-days">${WEEKDAY_NAMES.map((_, d) => renderDaySection(d)).join('')}</div>
+        <div id="tpl-error" class="login-error hidden" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="margin-left:auto" data-action="submit-template">Save plan</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+
+    function renderWeekTabs() {
+      const tabs = document.getElementById('tpl-week-tabs');
+      if (planType !== 'monthly') { tabs.classList.add('hidden'); tabs.innerHTML = ''; return; }
+      tabs.classList.remove('hidden');
+      tabs.innerHTML = [0, 1, 2, 3].map((w) => `<button type="button" class="btn-outline btn-sm" data-week-tab="${w}" style="${w === activeWeek ? 'background:var(--accent);color:#fff;border-color:var(--accent)' : ''}">Week ${w + 1}</button>`).join('');
+      tabs.querySelectorAll('[data-week-tab]').forEach((b) => b.addEventListener('click', () => {
+        activeWeek = Number(b.dataset.weekTab);
+        renderWeekTabs();
+        bindDays();
+      }));
+    }
+    function bindDays() {
+      const root = document.getElementById('tpl-days');
+      root.innerHTML = WEEKDAY_NAMES.map((_, d) => renderDaySection(d)).join('');
+      root.querySelectorAll('[data-ex-field]').forEach((input) => {
+        const row = input.closest('[data-ex-row]');
+        input.addEventListener('input', (e) => { weeks[activeWeek][Number(row.dataset.day)][row.dataset.section][Number(row.dataset.exRow)][input.dataset.exField] = e.target.value; });
+      });
+      root.querySelectorAll('[data-remove-ex]').forEach((b) => b.addEventListener('click', () => {
+        weeks[activeWeek][Number(b.dataset.day)][b.dataset.section].splice(Number(b.dataset.idx), 1);
+        bindDays();
+      }));
+      root.querySelectorAll('[data-add-ex]').forEach((b) => b.addEventListener('click', () => {
+        weeks[activeWeek][Number(b.dataset.day)][b.dataset.section].push({ name: '', sets: 3, reps: '10', weightNote: '' });
+        bindDays();
+      }));
+    }
+    bindDays();
+    document.getElementById('tpl-plan-type').addEventListener('change', (e) => {
+      planType = e.target.value;
+      activeWeek = 0;
+      renderWeekTabs();
+      bindDays();
+    });
+
+    const submitBtn = overlay.querySelector('[data-action="submit-template"]');
+    submitBtn.addEventListener('click', async () => {
+      const titleEl = document.getElementById('tpl-title');
+      const title = titleEl.value.trim();
+      const errBox = document.getElementById('tpl-error');
+      if (!title) { markInvalid(titleEl, 'Title is required.'); return; }
+      const priceEl = document.getElementById('tpl-price');
+      const priceCents = priceEl ? Math.round((parseFloat(priceEl.value) || 0) * 100) : 0;
+      const weekCount = planType === 'monthly' ? 4 : 1;
+      const exercises = [];
+      for (let w = 0; w < weekCount; w++) {
+        weeks[w].forEach((buckets, dayOfWeek) => WORKOUT_SECTIONS.forEach(([section]) => {
+          buckets[section].filter((e) => e.name.trim()).forEach((e) => exercises.push({ ...e, weekNumber: w + 1, dayOfWeek, section }));
+        }));
+      }
+      try {
+        await withBusy(submitBtn, () => api('/workout-plans/templates', {
+          method: 'POST', body: { title, planType, priceCents, visibility: isManager ? 'universal' : 'trainer', exercises },
+        }));
+        closeModal();
+        toast('Plan added to the library.', 'success');
+        renderPage('plan-library');
+      } catch (err) {
+        errBox.textContent = err.message; errBox.classList.remove('hidden');
+      }
+    });
+  }
+
+  async function openPlanPickerModal(memberId) {
+    modalRoot.innerHTML = '';
+    const templates = await api('/workout-plans/templates');
+    const universal = templates.filter((t) => t.visibility === 'universal');
+    const trainer = templates.filter((t) => t.visibility === 'trainer');
+    function rowHtml(t) {
+      return `<div style="display:flex;align-items:center;gap:10px;border:1px solid var(--border-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px">${esc(t.title)}</div>
+          <div style="font-size:11px;color:var(--muted)">${t.plan_type === 'monthly' ? 'Monthly · 4 weeks' : 'Weekly'} · ${t.exerciseCount} exercises${t.trainerName ? ` · By ${esc(t.trainerName)}` : ''}</div>
+        </div>
+        <span style="font-size:12.5px;font-weight:700;${t.price_cents ? '' : 'color:var(--accent-dark)'}">${t.price_cents ? formatCents(t.price_cents) : 'Free'}</span>
+        <button class="btn-outline btn-sm" data-action="assign-template" data-id="${t.id}" data-member="${memberId}">Assign</button>
+      </div>`;
+    }
+    const overlay = el(`<div class="modal-overlay" id="plan-picker-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Add from library</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Universal</div>
+        ${universal.length ? universal.map(rowHtml).join('') : '<div class="empty-state">No universal plans yet.</div>'}
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--muted);margin:14px 0 8px">Trainer plans</div>
+        ${trainer.length ? trainer.map(rowHtml).join('') : '<div class="empty-state">No trainer plans available to you yet.</div>'}
+      </div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
+  }
+
+  async function assignTemplate(templateId, btnEl) {
+    const memberId = Number(btnEl.dataset.member);
+    const template = (state.templatesCache || []).find((t) => t.id === templateId)
+      || (await api('/workout-plans/templates')).find((t) => t.id === templateId);
+    if (!template) { toast('Plan not found.', 'error'); return; }
+    const doAssign = async (paymentMethod, gatewayPaymentId) => {
+      await api(`/workout-plans/templates/${templateId}/assign`, { method: 'POST', body: { memberId, paymentMethod, gatewayPaymentId } });
+      closeModal();
+      toast('Plan assigned.', 'success');
+      if (state.route === 'members') renderPage('members');
+    };
+    if (!template.price_cents) {
+      try { await withBusy(btnEl, () => doAssign(undefined, undefined)); } catch (err) { toast(err.message, 'error'); }
+      return;
+    }
+    openCheckoutModal({
+      title: 'Assign paid plan',
+      lineItems: [{ label: template.title, amountCents: template.price_cents }],
+      totalCents: template.price_cents,
+      onConfirm: async (paymentMethod, gatewayPaymentId) => { await doAssign(paymentMethod, gatewayPaymentId); },
+    });
+  }
+
   // ---------- Kiosk ----------
   const kioskRoot = document.getElementById('kiosk-root');
   async function openKiosk() {
@@ -2770,6 +2987,10 @@
     else if (action === 'wizard-submit') wizardSubmit();
     else if (action === 'new-workout-plan') openWorkoutPlanModal(Number(a.dataset.member));
     else if (action === 'delete-workout-plan') deleteWorkoutPlan(Number(a.dataset.id), a);
+    else if (action === 'open-template-modal') openTemplateModal();
+    else if (action === 'delete-template') deleteTemplate(Number(a.dataset.id), a);
+    else if (action === 'open-plan-picker') openPlanPickerModal(Number(a.dataset.member));
+    else if (action === 'assign-template') assignTemplate(Number(a.dataset.id), a);
     else if (action === 'open-kiosk-from-page') openKiosk();
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();

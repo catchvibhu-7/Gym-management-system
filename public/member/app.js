@@ -200,30 +200,40 @@
     await refreshHeader();
     const plans = await api('/member/workout-plans');
     content.innerHTML = '';
-    content.appendChild(el(`<button class="btn btn-primary" id="new-plan-btn">+ Create a workout plan</button>`));
+    content.appendChild(el(`<div style="display:flex;gap:8px">
+      <button class="btn btn-primary" id="new-plan-btn" style="flex:1">+ Create a workout plan</button>
+      <button class="btn-outline" id="browse-plans-btn" style="flex:1">Browse free plans</button>
+    </div>`));
     if (!plans.length) {
-      content.appendChild(el(`<div class="card" style="text-align:center;color:var(--muted);font-size:13px">No workout plan yet. Build your own, or ask a coach to assign one.</div>`));
+      content.appendChild(el(`<div class="card" style="text-align:center;color:var(--muted);font-size:13px">No workout plan yet. Build your own, browse a free plan, or ask a coach to assign one.</div>`));
     }
-    plans.forEach((p) => {
+    const exHtml = (ex) => `<div class="plan-ex"><span>${esc(ex.name)}</span><span class="mono">${ex.sets || ''}${ex.sets && ex.reps ? '×' : ''}${ex.reps || ''}${ex.weight_note ? ' · ' + esc(ex.weight_note) : ''}</span></div>`;
+    function weekHtml(exercisesInWeek) {
       const byDay = WEEKDAY_NAMES.map(() => ({ warmup: [], workout: [], stretch: [] }));
-      p.exercises.forEach((ex) => {
+      exercisesInWeek.forEach((ex) => {
         const bucket = byDay[ex.day_of_week] || byDay[0];
         (bucket[ex.section] || bucket.workout).push(ex);
       });
-      const exHtml = (ex) => `<div class="plan-ex"><span>${esc(ex.name)}</span><span class="mono">${ex.sets || ''}${ex.sets && ex.reps ? '×' : ''}${ex.reps || ''}${ex.weight_note ? ' · ' + esc(ex.weight_note) : ''}</span></div>`;
+      return WEEKDAY_NAMES.map((day, i) => {
+        const isRestDay = WORKOUT_SECTIONS.every(([key]) => byDay[i][key].length === 0);
+        return `<div style="margin-top:10px">
+          <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${esc(day)}</div>
+          ${isRestDay ? `<div style="font-size:12px;color:var(--muted);padding:3px 0">Rest day</div>` : WORKOUT_SECTIONS.map(([key, label]) => byDay[i][key].length ? `
+            <div style="font-size:10px;font-weight:600;color:var(--muted);margin:4px 0 2px 8px">${esc(label)}</div>
+            ${byDay[i][key].map(exHtml).join('')}` : '').join('')}
+        </div>`;
+      }).join('');
+    }
+    plans.forEach((p) => {
+      const isMonthly = p.plan_type === 'monthly';
       const card = el(`<div class="card">
         <div class="plan-card" style="border:none;padding:0;margin:0">
           <div class="title">${esc(p.title)}</div>
           ${p.created_by === 'staff' ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Assigned by your coach</div>` : ''}
-          ${WEEKDAY_NAMES.map((day, i) => {
-            const isRestDay = WORKOUT_SECTIONS.every(([key]) => byDay[i][key].length === 0);
-            return `<div style="margin-top:10px">
-              <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${esc(day)}</div>
-              ${isRestDay ? `<div style="font-size:12px;color:var(--muted);padding:3px 0">Rest day</div>` : WORKOUT_SECTIONS.map(([key, label]) => byDay[i][key].length ? `
-                <div style="font-size:10px;font-weight:600;color:var(--muted);margin:4px 0 2px 8px">${esc(label)}</div>
-                ${byDay[i][key].map(exHtml).join('')}` : '').join('')}
-            </div>`;
-          }).join('')}
+          ${isMonthly ? [1, 2, 3, 4].map((w) => `<div style="margin-top:14px">
+              <div style="font-size:11px;font-weight:700;color:var(--accent-dark,#0e5f4a)">WEEK ${w}</div>
+              ${weekHtml(p.exercises.filter((ex) => ex.week_number === w))}
+            </div>`).join('') : weekHtml(p.exercises)}
         </div>
         <button class="btn-outline" style="width:100%;margin-top:10px;border-radius:8px;padding:9px;font-size:12px;font-weight:700" data-delete-plan="${p.id}">Delete</button>
       </div>`);
@@ -241,6 +251,29 @@
       }
     }));
     document.getElementById('new-plan-btn').addEventListener('click', () => openPlanEditor(content));
+    document.getElementById('browse-plans-btn').addEventListener('click', () => openPlanBrowser(content));
+  }
+
+  async function openPlanBrowser(content) {
+    const templates = await api('/member/workout-plan-templates');
+    const wrap = el(`<div class="card">
+      <div class="title" style="margin-bottom:10px">Free plans</div>
+      ${templates.length ? templates.map((t) => `<div style="display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border,#eee);padding:10px 0">
+          <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">${esc(t.title)}</div>
+            <div style="font-size:11px;color:var(--muted)">${t.plan_type === 'monthly' ? 'Monthly · 4 weeks' : 'Weekly'} · ${t.exerciseCount} exercises</div></div>
+          <button class="btn-outline btn-sm" data-pick-template="${t.id}">Add</button>
+        </div>`).join('') : `<div style="font-size:13px;color:var(--muted)">No free plans available right now.</div>`}
+    </div>`);
+    content.prepend(wrap);
+    wrap.querySelectorAll('[data-pick-template]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await withBusy(b, () => api(`/member/workout-plan-templates/${b.dataset.pickTemplate}/pick`, { method: 'POST' }));
+        toast('Plan added.', 'success');
+        tabPlan(content);
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }));
   }
 
   function openPlanEditor(content) {

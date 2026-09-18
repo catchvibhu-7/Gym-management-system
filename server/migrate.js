@@ -55,6 +55,47 @@ function migrateStaffRoleCheck(db) {
   }
 }
 
+// workout_plans.member_id started NOT NULL (every row was a per-member
+// assignment) - a template/library plan has no member yet, so this widens
+// it to nullable the same recreate-table way migrateStaffRoleCheck widens
+// a CHECK constraint. Detected via the stored CREATE TABLE text so this
+// stays a no-op once applied.
+function migrateWorkoutPlansMemberIdNullable(db) {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'workout_plans'`).get();
+  if (!row || !row.sql.includes('member_id INTEGER NOT NULL')) return;
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE workout_plans_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER REFERENCES members(id) ON DELETE CASCADE,
+        created_by TEXT NOT NULL DEFAULT 'member' CHECK (created_by IN ('member','staff')),
+        created_by_staff_id INTEGER REFERENCES staff(id),
+        title TEXT NOT NULL,
+        notes TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    db.exec('INSERT INTO workout_plans_new SELECT * FROM workout_plans');
+    db.exec('DROP TABLE workout_plans');
+    db.exec('ALTER TABLE workout_plans_new RENAME TO workout_plans');
+    db.exec(`
+      INSERT INTO sqlite_sequence (name, seq)
+      SELECT 'workout_plans', COALESCE((SELECT MAX(id) FROM workout_plans), 0)
+      WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'workout_plans')
+    `);
+    db.exec(`UPDATE sqlite_sequence SET seq = (SELECT COALESCE(MAX(id),0) FROM workout_plans) WHERE name = 'workout_plans'`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function runMigrations(db) {
   ensureColumn(db, 'plans', 'billing_period', "TEXT NOT NULL DEFAULT 'monthly'");
   ensureColumn(db, 'memberships', 'billing_period', "TEXT NOT NULL DEFAULT 'monthly'");
@@ -75,6 +116,16 @@ function runMigrations(db) {
   ensureColumn(db, 'day_pass_types', 'gst_applicable', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'workout_plan_exercises', 'day_of_week', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'workout_plan_exercises', 'section', "TEXT NOT NULL DEFAULT 'workout' CHECK (section IN ('warmup','workout','stretch'))");
+  ensureColumn(db, 'workout_plan_exercises', 'week_number', 'INTEGER NOT NULL DEFAULT 1');
+  // Must run before the ensureColumn calls below - it recreates the table
+  // from its OLD (pre-library-feature) column set, so any new columns
+  // added first would be dropped by the recreation's INSERT...SELECT *.
+  migrateWorkoutPlansMemberIdNullable(db);
+  ensureColumn(db, 'workout_plans', 'is_template', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'workout_plans', 'plan_type', "TEXT NOT NULL DEFAULT 'weekly' CHECK (plan_type IN ('weekly','monthly'))");
+  ensureColumn(db, 'workout_plans', 'visibility', "TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','trainer','universal'))");
+  ensureColumn(db, 'workout_plans', 'price_cents', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'workout_plans', 'source_template_id', 'INTEGER REFERENCES workout_plans(id)');
   ensureColumn(db, 'staff', 'staff_type', 'TEXT');
   ensureColumn(db, 'staff', 'pt_rate_cents', 'INTEGER');
   ensureColumn(db, 'day_passes', 'payment_method', 'TEXT');
