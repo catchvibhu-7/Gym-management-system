@@ -2897,17 +2897,17 @@
   // Camera-based scanning: the QR/day-pass images this app generates
   // encode the exact same plain code string /api/checkins/scan expects
   // from a USB scanner-as-keyboard, so decoding one from a live camera
-  // frame can drive check-in the same way. Uses the browser's built-in
-  // BarcodeDetector (Chrome/Edge/Android) rather than adding a JS QR
-  // decoding library as a dependency; falls back to a clear message on
-  // browsers without it (Safari, Firefox) instead of silently doing
-  // nothing or requesting a camera permission for a feature that can't
-  // actually work there.
+  // frame can drive check-in the same way. Decodes frames with the
+  // vendored jsQR library (public/console/vendor/jsQR.js, pure JS, no
+  // dependency on the native BarcodeDetector API) so this works on any
+  // browser that supports getUserMedia + canvas - BarcodeDetector alone
+  // is missing on desktop Chrome/Firefox/Safari, which is why the first
+  // version of this feature reported "not supported" there.
   async function startCameraScan() {
     const errBox = document.getElementById('kiosk-error');
     if (errBox) errBox.textContent = '';
-    if (typeof window.BarcodeDetector === 'undefined') {
-      if (errBox) errBox.textContent = "Camera scanning isn't supported in this browser. Use a barcode scanner or search below.";
+    if (typeof window.jsQR === 'undefined') {
+      if (errBox) errBox.textContent = 'Camera scanning failed to load. Use a barcode scanner or search below.';
       return;
     }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -2926,21 +2926,26 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
       video.srcObject = stream;
-      const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      await video.play().catch(() => {});
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       let scanning = true;
       kioskRoot._stopCameraScan = () => { scanning = false; stream.getTracks().forEach((t) => t.stop()); };
       (async function loop() {
         while (scanning) {
-          try {
-            const codes = await detector.detect(video);
-            if (codes.length && codes[0].rawValue) {
-              const value = codes[0].rawValue;
+          if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const code = window.jsQR(frame.data, frame.width, frame.height, { inversionAttempts: 'dontInvert' });
+            if (code && code.data) {
               stopCameraScan();
-              await doScan(value);
+              await doScan(code.data);
               return;
             }
-          } catch (e) { /* transient decode error - keep looping */ }
-          await new Promise((r) => setTimeout(r, 300));
+          }
+          await new Promise((r) => setTimeout(r, 200));
         }
       })();
     } catch (err) {
