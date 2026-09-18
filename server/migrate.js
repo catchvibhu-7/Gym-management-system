@@ -74,6 +74,7 @@ function runMigrations(db) {
   ensureColumn(db, 'plans', 'gst_applicable', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'day_pass_types', 'gst_applicable', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'workout_plan_exercises', 'day_of_week', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'workout_plan_exercises', 'section', "TEXT NOT NULL DEFAULT 'workout' CHECK (section IN ('warmup','workout','stretch'))");
   ensureColumn(db, 'staff', 'staff_type', 'TEXT');
   ensureColumn(db, 'staff', 'pt_rate_cents', 'INTEGER');
   ensureColumn(db, 'day_passes', 'payment_method', 'TEXT');

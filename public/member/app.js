@@ -1,6 +1,7 @@
 (() => {
   const state = { me: null, tab: 'home' };
   const WEEKDAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const WORKOUT_SECTIONS = [['warmup', 'Warm up'], ['workout', 'Workout'], ['stretch', 'Post stretch']];
 
   async function api(path, opts = {}) {
     const res = await fetch(`/api${path}`, {
@@ -204,16 +205,25 @@
       content.appendChild(el(`<div class="card" style="text-align:center;color:var(--muted);font-size:13px">No workout plan yet. Build your own, or ask a coach to assign one.</div>`));
     }
     plans.forEach((p) => {
-      const byDay = WEEKDAY_NAMES.map(() => []);
-      p.exercises.forEach((ex) => { (byDay[ex.day_of_week] || byDay[0]).push(ex); });
+      const byDay = WEEKDAY_NAMES.map(() => ({ warmup: [], workout: [], stretch: [] }));
+      p.exercises.forEach((ex) => {
+        const bucket = byDay[ex.day_of_week] || byDay[0];
+        (bucket[ex.section] || bucket.workout).push(ex);
+      });
+      const exHtml = (ex) => `<div class="plan-ex"><span>${esc(ex.name)}</span><span class="mono">${ex.sets || ''}${ex.sets && ex.reps ? '×' : ''}${ex.reps || ''}${ex.weight_note ? ' · ' + esc(ex.weight_note) : ''}</span></div>`;
       const card = el(`<div class="card">
         <div class="plan-card" style="border:none;padding:0;margin:0">
           <div class="title">${esc(p.title)}</div>
           ${p.created_by === 'staff' ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Assigned by your coach</div>` : ''}
-          ${WEEKDAY_NAMES.map((day, i) => `<div style="margin-top:10px">
+          ${WEEKDAY_NAMES.map((day, i) => {
+            const isRestDay = WORKOUT_SECTIONS.every(([key]) => byDay[i][key].length === 0);
+            return `<div style="margin-top:10px">
               <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${esc(day)}</div>
-              ${byDay[i].length ? byDay[i].map((ex) => `<div class="plan-ex"><span>${esc(ex.name)}</span><span class="mono">${ex.sets || ''}${ex.sets && ex.reps ? '×' : ''}${ex.reps || ''}${ex.weight_note ? ' · ' + esc(ex.weight_note) : ''}</span></div>`).join('') : `<div style="font-size:12px;color:var(--muted);padding:3px 0">Rest day</div>`}
-            </div>`).join('')}
+              ${isRestDay ? `<div style="font-size:12px;color:var(--muted);padding:3px 0">Rest day</div>` : WORKOUT_SECTIONS.map(([key, label]) => byDay[i][key].length ? `
+                <div style="font-size:10px;font-weight:600;color:var(--muted);margin:4px 0 2px 8px">${esc(label)}</div>
+                ${byDay[i][key].map(exHtml).join('')}` : '').join('')}
+            </div>`;
+          }).join('')}
         </div>
         <button class="btn-outline" style="width:100%;margin-top:10px;border-radius:8px;padding:9px;font-size:12px;font-weight:700" data-delete-plan="${p.id}">Delete</button>
       </div>`);
@@ -234,9 +244,10 @@
   }
 
   function openPlanEditor(content) {
-    // One exercise list per weekday, Monday first - an empty day is just a
-    // rest day, no separate "off" flag needed.
-    const days = WEEKDAY_NAMES.map(() => []);
+    // One {warmup,workout,stretch} bucket of exercises per weekday, Monday
+    // first - a day with nothing in any bucket is just a rest day, no
+    // separate "off" flag needed.
+    const days = WEEKDAY_NAMES.map(() => ({ warmup: [], workout: [], stretch: [] }));
     const wrap = el(`<div class="card">
       <label class="field">Plan title<input id="plan-title" placeholder="e.g. Push day"></label>
       <div id="plan-days"></div>
@@ -246,29 +257,36 @@
     content.prepend(wrap);
     function renderDays() {
       const daysEl = wrap.querySelector('#plan-days');
-      daysEl.innerHTML = days.map((rows, d) => `<div style="margin:10px 0" data-day-section="${d}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)">${esc(WEEKDAY_NAMES[d])}</div>
-          <button type="button" data-add-ex="${d}" style="margin-left:auto;border:none;background:none;color:var(--accent-dark,#0e5f4a);font-size:11.5px;font-weight:700">+ Add exercise</button>
-        </div>
-        ${rows.length ? rows.map((ex, i) => `<div class="ex-row" data-day="${d}" data-row="${i}">
-            <input placeholder="Exercise" value="${esc(ex.name)}" data-f="name">
-            <input placeholder="Sets" value="${esc(ex.sets)}" data-f="sets">
-            <input placeholder="Reps" value="${esc(ex.reps)}" data-f="reps">
-            <input placeholder="Weight" value="${esc(ex.weightNote)}" data-f="weightNote">
-            <button type="button" data-rm data-day="${d}" data-idx="${i}" style="border:none;background:none;color:#a3221f;font-size:14px">×</button>
-          </div>`).join('') : `<div style="font-size:12px;color:var(--muted);padding:2px 0">Rest day</div>`}
-      </div>`).join('');
+      daysEl.innerHTML = days.map((buckets, d) => {
+        const isRestDay = WORKOUT_SECTIONS.every(([key]) => buckets[key].length === 0);
+        return `<div style="margin:10px 0" data-day-section="${d}">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:4px">${esc(WEEKDAY_NAMES[d])}</div>
+        ${isRestDay ? `<div style="font-size:12px;color:var(--muted);padding:2px 0">Rest day</div>` : ''}
+        ${WORKOUT_SECTIONS.map(([key, label]) => `<div style="margin:0 0 6px 8px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <div style="font-size:10.5px;font-weight:600;color:var(--muted)">${esc(label)}</div>
+            <button type="button" data-add-ex data-day="${d}" data-section="${key}" style="margin-left:auto;border:none;background:none;color:var(--accent-dark,#0e5f4a);font-size:11px;font-weight:700">+ Add exercise</button>
+          </div>
+          ${buckets[key].map((ex, i) => `<div class="ex-row" data-day="${d}" data-section="${key}" data-row="${i}">
+              <input placeholder="Exercise" value="${esc(ex.name)}" data-f="name">
+              <input placeholder="Sets" value="${esc(ex.sets)}" data-f="sets">
+              <input placeholder="Reps" value="${esc(ex.reps)}" data-f="reps">
+              <input placeholder="Weight" value="${esc(ex.weightNote)}" data-f="weightNote">
+              <button type="button" data-rm data-day="${d}" data-section="${key}" data-idx="${i}" style="border:none;background:none;color:#a3221f;font-size:14px">×</button>
+            </div>`).join('')}
+        </div>`).join('')}
+      </div>`;
+      }).join('');
       daysEl.querySelectorAll('[data-f]').forEach((inp) => {
         const row = inp.closest('[data-row]');
-        inp.addEventListener('input', (e) => { days[Number(row.dataset.day)][Number(row.dataset.row)][inp.dataset.f] = e.target.value; });
+        inp.addEventListener('input', (e) => { days[Number(row.dataset.day)][row.dataset.section][Number(row.dataset.row)][inp.dataset.f] = e.target.value; });
       });
       daysEl.querySelectorAll('[data-rm]').forEach((b) => b.addEventListener('click', () => {
-        days[Number(b.dataset.day)].splice(Number(b.dataset.idx), 1);
+        days[Number(b.dataset.day)][b.dataset.section].splice(Number(b.dataset.idx), 1);
         renderDays();
       }));
       daysEl.querySelectorAll('[data-add-ex]').forEach((b) => b.addEventListener('click', () => {
-        days[Number(b.dataset.addEx)].push({ name: '', sets: 3, reps: '10', weightNote: '' });
+        days[Number(b.dataset.day)][b.dataset.section].push({ name: '', sets: 3, reps: '10', weightNote: '' });
         renderDays();
       }));
     }
@@ -279,7 +297,8 @@
       const title = titleEl.value.trim();
       const errBox = wrap.querySelector('#plan-error');
       if (!title) { markInvalid(titleEl, 'Give your plan a title.'); return; }
-      const exercises = days.flatMap((rows, dayOfWeek) => rows.filter((e) => e.name.trim()).map((e) => ({ ...e, dayOfWeek })));
+      const exercises = days.flatMap((buckets, dayOfWeek) => WORKOUT_SECTIONS.flatMap(([section]) =>
+        buckets[section].filter((e) => e.name.trim()).map((e) => ({ ...e, dayOfWeek, section }))));
       try {
         await withBusy(saveBtn, () => api('/member/workout-plans', { method: 'POST', body: { title, exercises } }));
         toast('Plan saved.', 'success');

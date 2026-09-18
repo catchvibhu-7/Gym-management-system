@@ -26,10 +26,10 @@ router.post('/', (req, res) => {
     `INSERT INTO workout_plans (member_id, created_by, created_by_staff_id, title, notes) VALUES (?, 'staff', ?, ?, ?)`
   ).run(memberId, req.staff.id, title, notes || null).lastInsertRowid;
   const insertEx = db.prepare(
-    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, section, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   );
-  exercises.forEach((e, i) => insertEx.run(planId, e.dayOfWeek || 0, i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
+  exercises.forEach((e, i) => insertEx.run(planId, e.dayOfWeek || 0, e.section || 'workout', i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
   res.status(201).json(loadPlan(planId));
 });
 

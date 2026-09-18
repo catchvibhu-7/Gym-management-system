@@ -2396,26 +2396,34 @@
     modalRoot.appendChild(overlay);
   }
 
+  const WORKOUT_SECTIONS = [['warmup', 'Warm up'], ['workout', 'Workout'], ['stretch', 'Post stretch']];
+
   function openWorkoutPlanModal(memberId) {
     modalRoot.innerHTML = '';
-    // One array of exercises per weekday, Monday first - a day left empty
-    // is simply a rest day, no separate "off" flag needed.
-    const days = WEEKDAY_NAMES.map(() => []);
+    // One {warmup,workout,stretch} bucket of exercises per weekday, Monday
+    // first - a day with nothing in any bucket is simply a rest day, no
+    // separate "off" flag needed.
+    const days = WEEKDAY_NAMES.map(() => ({ warmup: [], workout: [], stretch: [] }));
 
     function renderDaySection(dayIdx) {
-      const rows = days[dayIdx];
-      return `<div style="margin-bottom:16px" data-day-section="${dayIdx}">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em">${WEEKDAY_NAMES[dayIdx]}</div>
-          <button type="button" class="btn-quiet" style="margin-left:auto;font-size:11.5px" data-add-ex="${dayIdx}">+ Add exercise</button>
-        </div>
-        ${rows.length ? rows.map((ex, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px" data-day="${dayIdx}" data-ex-row="${i}">
-            <input placeholder="Exercise" value="${esc(ex.name)}" data-ex-field="name">
-            <input placeholder="Sets" value="${esc(ex.sets)}" data-ex-field="sets">
-            <input placeholder="Reps" value="${esc(ex.reps)}" data-ex-field="reps">
-            <input placeholder="Weight" value="${esc(ex.weightNote)}" data-ex-field="weightNote">
-            <button type="button" class="btn-outline btn-sm" data-remove-ex data-day="${dayIdx}" data-idx="${i}">×</button>
-          </div>`).join('') : `<div style="font-size:11.5px;color:var(--muted);padding:4px 0 2px">Rest day</div>`}
+      const buckets = days[dayIdx];
+      const isRestDay = WORKOUT_SECTIONS.every(([key]) => buckets[key].length === 0);
+      return `<div style="margin-bottom:18px" data-day-section="${dayIdx}">
+        <div style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">${WEEKDAY_NAMES[dayIdx]}</div>
+        ${isRestDay ? `<div style="font-size:11.5px;color:var(--muted);padding:2px 0 2px">Rest day</div>` : ''}
+        ${WORKOUT_SECTIONS.map(([key, label]) => `<div style="margin:0 0 8px 10px" data-section-block="${key}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <div style="font-size:11px;font-weight:600;color:var(--muted)">${esc(label)}</div>
+            <button type="button" class="btn-quiet" style="margin-left:auto;font-size:11px" data-add-ex data-day="${dayIdx}" data-section="${key}">+ Add exercise</button>
+          </div>
+          ${buckets[key].map((ex, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 28px;gap:6px;margin-bottom:6px" data-day="${dayIdx}" data-section="${key}" data-ex-row="${i}">
+              <input placeholder="Exercise" value="${esc(ex.name)}" data-ex-field="name">
+              <input placeholder="Sets" value="${esc(ex.sets)}" data-ex-field="sets">
+              <input placeholder="Reps" value="${esc(ex.reps)}" data-ex-field="reps">
+              <input placeholder="Weight" value="${esc(ex.weightNote)}" data-ex-field="weightNote">
+              <button type="button" class="btn-outline btn-sm" data-remove-ex data-day="${dayIdx}" data-section="${key}" data-idx="${i}">×</button>
+            </div>`).join('')}
+        </div>`).join('')}
       </div>`;
     }
     const overlay = el(`<div class="modal-overlay" id="wp-overlay"><div class="modal" style="max-width:580px">
@@ -2434,14 +2442,14 @@
       root.innerHTML = days.map((_, i) => renderDaySection(i)).join('');
       root.querySelectorAll('[data-ex-field]').forEach((input) => {
         const row = input.closest('[data-ex-row]');
-        input.addEventListener('input', (e) => { days[Number(row.dataset.day)][Number(row.dataset.exRow)][input.dataset.exField] = e.target.value; });
+        input.addEventListener('input', (e) => { days[Number(row.dataset.day)][row.dataset.section][Number(row.dataset.exRow)][input.dataset.exField] = e.target.value; });
       });
       root.querySelectorAll('[data-remove-ex]').forEach((b) => b.addEventListener('click', () => {
-        days[Number(b.dataset.day)].splice(Number(b.dataset.idx), 1);
+        days[Number(b.dataset.day)][b.dataset.section].splice(Number(b.dataset.idx), 1);
         bindDays();
       }));
       root.querySelectorAll('[data-add-ex]').forEach((b) => b.addEventListener('click', () => {
-        days[Number(b.dataset.addEx)].push({ name: '', sets: 3, reps: '10', weightNote: '' });
+        days[Number(b.dataset.day)][b.dataset.section].push({ name: '', sets: 3, reps: '10', weightNote: '' });
         bindDays();
       }));
     }
@@ -2452,7 +2460,8 @@
       const title = titleEl.value.trim();
       const errBox = document.getElementById('wp-error');
       if (!title) { markInvalid(titleEl, 'Title is required.'); return; }
-      const exercises = days.flatMap((rows, dayOfWeek) => rows.filter((e) => e.name.trim()).map((e) => ({ ...e, dayOfWeek })));
+      const exercises = days.flatMap((buckets, dayOfWeek) => WORKOUT_SECTIONS.flatMap(([section]) =>
+        buckets[section].filter((e) => e.name.trim()).map((e) => ({ ...e, dayOfWeek, section }))));
       try {
         await withBusy(wpSubmitBtn, () => api('/workout-plans', { method: 'POST', body: { memberId, title, exercises } }));
         closeModal();

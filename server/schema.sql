@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS workout_plan_exercises (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_id INTEGER NOT NULL REFERENCES workout_plans(id) ON DELETE CASCADE,
   day_of_week INTEGER NOT NULL DEFAULT 0,
+  section TEXT NOT NULL DEFAULT 'workout' CHECK (section IN ('warmup','workout','stretch')),
   sort_order INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL,
   sets INTEGER,

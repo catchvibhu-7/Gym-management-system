@@ -117,10 +117,10 @@ router.post('/workout-plans', (req, res) => {
     `INSERT INTO workout_plans (member_id, created_by, title, notes) VALUES (?, 'member', ?, ?)`
   ).run(req.member.id, title, notes || null).lastInsertRowid;
   const insertEx = db.prepare(
-    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, section, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   );
-  exercises.forEach((e, i) => insertEx.run(planId, e.dayOfWeek || 0, i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
+  exercises.forEach((e, i) => insertEx.run(planId, e.dayOfWeek || 0, e.section || 'workout', i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
   res.status(201).json(loadPlan(planId));
 });
 
@@ -131,10 +131,10 @@ router.put('/workout-plans/:id', (req, res) => {
   db.prepare('UPDATE workout_plans SET title = ?, notes = ? WHERE id = ?').run(title || plan.title, notes ?? plan.notes, plan.id);
   db.prepare('DELETE FROM workout_plan_exercises WHERE plan_id = ?').run(plan.id);
   const insertEx = db.prepare(
-    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
-     VALUES (?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO workout_plan_exercises (plan_id, day_of_week, section, sort_order, name, sets, reps, weight_note, rest_seconds, notes)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`
   );
-  exercises.forEach((e, i) => insertEx.run(plan.id, e.dayOfWeek || 0, i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
+  exercises.forEach((e, i) => insertEx.run(plan.id, e.dayOfWeek || 0, e.section || 'workout', i, e.name, e.sets || null, e.reps || null, e.weightNote || null, e.restSeconds || null, e.notes || null));
   res.json(loadPlan(plan.id));
 });
 
