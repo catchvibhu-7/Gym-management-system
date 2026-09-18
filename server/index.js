@@ -56,6 +56,10 @@ app.use('/api/staff-attendance', require('./routes/staffAttendance'));
 app.use('/api/pt-sessions', require('./routes/ptSessions'));
 
 app.get('/', (req, res) => res.redirect('/console/'));
+// A memorable, bookmarkable URL for a shared front-desk device - the
+// #kiosk hash is what app.js's showApp() checks to log straight into
+// kiosk mode instead of the normal console after signing in.
+app.get('/kiosk', (req, res) => res.redirect('/console/#kiosk'));
 
 app.use((err, req, res, next) => {
   console.error(err);

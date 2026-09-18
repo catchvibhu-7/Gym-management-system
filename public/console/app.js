@@ -327,7 +327,16 @@
     // so it's hidden for this role rather than just landing somewhere else.
     document.getElementById('open-kiosk-btn').classList.toggle('hidden', state.staff.role === 'admin');
     applyBranding();
-    const startRoute = location.hash.replace('#', '') || defaultRouteFor(state.staff.role);
+    const rawHash = location.hash.replace('#', '');
+    // A bookmarkable /kiosk link (redirected here as #kiosk by the server)
+    // logs any staff member straight into kiosk mode instead of the normal
+    // console - lets a shared front-desk device just open one URL.
+    if (rawHash === 'kiosk' && state.staff.role !== 'admin') {
+      go(defaultRouteFor(state.staff.role));
+      openKiosk();
+      return;
+    }
+    const startRoute = rawHash || defaultRouteFor(state.staff.role);
     go(startRoute);
   }
 
@@ -2549,6 +2558,7 @@
     await renderKioskIdle();
   }
   async function closeKiosk() {
+    if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
     if (state.staff && state.staff.role === 'kiosk') {
       // A kiosk account has nothing behind this screen to return to -
       // "exit" for it means signing out, not revealing the app shell.
@@ -2577,10 +2587,15 @@
       </div>
       <div class="kiosk-mid">
         <div style="text-align:center;max-width:480px;width:100%">
-          <div class="qr-swatch" style="width:150px;height:150px;margin:0 auto 24px"></div>
+          <div id="kiosk-camera-wrap" style="margin:0 auto 16px"></div>
+          <div class="qr-swatch" id="kiosk-qr-swatch" style="width:150px;height:150px;margin:0 auto 24px"></div>
           <h2 style="font-family:'Archivo Black',sans-serif;font-size:30px;letter-spacing:-1px;margin:0">Scan your code or tap your fob</h2>
           <p style="margin:12px 0 20px;font-size:14px;color:var(--muted-2);line-height:1.55">Type or scan the code, then press Enter.</p>
           <input id="kiosk-scan-input" autofocus placeholder="Scan code…" style="width:100%;text-align:center;font-size:16px;padding:14px;border-radius:10px;border:1px solid #33382f;background:#16180f;color:#fff">
+          <div style="margin-top:12px">
+            <button class="btn-outline" id="kiosk-camera-toggle" style="background:transparent;border-color:#33382f;color:#c9cdc4">Use camera instead</button>
+            <button class="btn-outline hidden" id="kiosk-camera-stop" style="background:transparent;border-color:#33382f;color:#c9cdc4">Stop camera</button>
+          </div>
           <div id="kiosk-error" style="margin-top:14px;color:#ff8a80;font-size:13px"></div>
           <div style="margin-top:22px;border-top:1px solid #23261f;padding-top:18px">
             <div style="font-size:11.5px;color:var(--muted-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Or check in manually</div>
@@ -2605,6 +2620,8 @@
       if (e.key !== 'Enter' || !input.value.trim()) return;
       await doScan(input.value.trim());
     });
+    document.getElementById('kiosk-camera-toggle').addEventListener('click', startCameraScan);
+    document.getElementById('kiosk-camera-stop').addEventListener('click', stopCameraScan);
 
     const searchInput = document.getElementById('kiosk-member-search');
     let searchTimer;
@@ -2621,6 +2638,72 @@
         }));
       }, 250);
     });
+  }
+
+  // Camera-based scanning: the QR/day-pass images this app generates
+  // encode the exact same plain code string /api/checkins/scan expects
+  // from a USB scanner-as-keyboard, so decoding one from a live camera
+  // frame can drive check-in the same way. Uses the browser's built-in
+  // BarcodeDetector (Chrome/Edge/Android) rather than adding a JS QR
+  // decoding library as a dependency; falls back to a clear message on
+  // browsers without it (Safari, Firefox) instead of silently doing
+  // nothing or requesting a camera permission for a feature that can't
+  // actually work there.
+  async function startCameraScan() {
+    const errBox = document.getElementById('kiosk-error');
+    if (errBox) errBox.textContent = '';
+    if (typeof window.BarcodeDetector === 'undefined') {
+      if (errBox) errBox.textContent = "Camera scanning isn't supported in this browser. Use a barcode scanner or search below.";
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (errBox) errBox.textContent = 'Camera access needs a secure connection (HTTPS) or localhost on this device.';
+      return;
+    }
+    const wrap = document.getElementById('kiosk-camera-wrap');
+    const swatch = document.getElementById('kiosk-qr-swatch');
+    const video = document.createElement('video');
+    video.autoplay = true; video.playsInline = true; video.muted = true;
+    video.style.cssText = 'width:220px;height:220px;object-fit:cover;border-radius:12px;background:#000';
+    wrap.innerHTML = ''; wrap.appendChild(video);
+    if (swatch) swatch.classList.add('hidden');
+    document.getElementById('kiosk-camera-toggle').classList.add('hidden');
+    document.getElementById('kiosk-camera-stop').classList.remove('hidden');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      video.srcObject = stream;
+      const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+      let scanning = true;
+      kioskRoot._stopCameraScan = () => { scanning = false; stream.getTracks().forEach((t) => t.stop()); };
+      (async function loop() {
+        while (scanning) {
+          try {
+            const codes = await detector.detect(video);
+            if (codes.length && codes[0].rawValue) {
+              const value = codes[0].rawValue;
+              stopCameraScan();
+              await doScan(value);
+              return;
+            }
+          } catch (e) { /* transient decode error - keep looping */ }
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      })();
+    } catch (err) {
+      if (errBox) errBox.textContent = err.name === 'NotAllowedError' ? 'Camera permission was denied.' : (err.message || 'Could not access the camera.');
+      stopCameraScan();
+    }
+  }
+  function stopCameraScan() {
+    if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
+    const wrap = document.getElementById('kiosk-camera-wrap');
+    const swatch = document.getElementById('kiosk-qr-swatch');
+    const toggle = document.getElementById('kiosk-camera-toggle');
+    const stop = document.getElementById('kiosk-camera-stop');
+    if (wrap) wrap.innerHTML = '';
+    if (swatch) swatch.classList.remove('hidden');
+    if (toggle) toggle.classList.remove('hidden');
+    if (stop) stop.classList.add('hidden');
   }
 
   async function doScanByMemberId(memberId) {
@@ -2648,6 +2731,7 @@
 
   function renderKioskResult(result) {
     if (kioskRoot._clockTimer) clearInterval(kioskRoot._clockTimer);
+    if (kioskRoot._stopCameraScan) { kioskRoot._stopCameraScan(); kioskRoot._stopCameraScan = null; }
     const overlay = kioskRoot.querySelector('.kiosk-overlay');
     const mid = overlay.querySelector('.kiosk-mid');
     if (result.action === 'checked_out') {
