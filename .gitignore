@@ -5,6 +5,7 @@ data/gym.db-wal
 data/backups/*
 data/uploads/*
 !data/uploads/.gitkeep
+data/certs/
 dist-electron/
 *.log
 .DS_Store

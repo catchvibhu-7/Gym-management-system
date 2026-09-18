@@ -1,4 +1,6 @@
 const path = require('path');
+const https = require('https');
+const tls = require('tls');
 const express = require('express');
 const cookieParser = require('cookie-parser');
 
@@ -9,6 +11,8 @@ seed();
 const { UPLOADS_DIR } = require('./storage');
 const { findAvailablePort, getLanIPs } = require('./net-utils');
 const { startBackupSchedule } = require('./backup');
+const { ensureSelfSignedCert, getTailscaleCert } = require('./https-cert');
+const runtimeInfo = require('./runtime-info');
 
 const paymentsRoutes = require('./routes/payments');
 
@@ -66,6 +70,51 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error' });
 });
 
+// A phone's browser refuses to expose the camera (getUserMedia) on a plain
+// http:// LAN address at all - it's not a "secure context", full stop, no
+// app code can talk it out of that. This starts a second, HTTPS listener
+// next to the normal http one so the kiosk/member app actually has a
+// camera-capable URL to hand a phone. It tries a real Tailscale-issued
+// certificate first (zero browser warning, but only for the Tailscale
+// hostname, and only if the CLI/tailnet support it) and always falls back
+// to a self-signed one covering every LAN IP (works everywhere, but shows
+// a one-time "connection not private" warning to click through).
+async function startHttpsServer(httpPort, lanIPs) {
+  const desiredHttpsPort = parseInt(process.env.HTTPS_PORT, 10) || httpPort + 1;
+  let httpsPort;
+  try {
+    httpsPort = await findAvailablePort(desiredHttpsPort);
+  } catch (err) {
+    console.warn('Could not find a free HTTPS port - camera access from other devices will be unavailable:', err.message);
+    return { httpsServer: null, httpsPort: null, tailscaleHostname: null };
+  }
+
+  const selfSigned = await ensureSelfSignedCert(lanIPs);
+  const tsCert = await getTailscaleCert();
+  const tsSecureContext = tsCert ? tls.createSecureContext({ key: tsCert.key, cert: tsCert.cert }) : null;
+
+  return new Promise((resolve) => {
+    const httpsServer = https.createServer({
+      key: selfSigned.key,
+      cert: selfSigned.cert,
+      // A request by IP never carries SNI (only hostname-based requests
+      // do), so this only ever kicks in for the Tailscale MagicDNS name -
+      // any LAN-IP connection transparently gets the self-signed default.
+      SNICallback: (servername, cb) => {
+        if (tsSecureContext && tsCert && servername === tsCert.hostname) cb(null, tsSecureContext);
+        else cb(null, null);
+      },
+    }, app);
+    httpsServer.on('error', (err) => {
+      console.warn(`HTTPS server failed to start on port ${httpsPort} - camera access from other devices will be unavailable:`, err.message);
+      resolve({ httpsServer: null, httpsPort: null, tailscaleHostname: tsCert ? tsCert.hostname : null });
+    });
+    httpsServer.listen(httpsPort, '0.0.0.0', () => {
+      resolve({ httpsServer, httpsPort, tailscaleHostname: tsCert ? tsCert.hostname : null });
+    });
+  });
+}
+
 async function startServer() {
   const desiredPort = parseInt(process.env.PORT, 10) || 3300;
   const port = await findAvailablePort(desiredPort);
@@ -74,14 +123,25 @@ async function startServer() {
   }
 
   return new Promise((resolve) => {
-    const server = app.listen(port, '0.0.0.0', () => {
+    const server = app.listen(port, '0.0.0.0', async () => {
       const lanIPs = getLanIPs();
       console.log(`Gym management server running on http://localhost:${port}`);
       lanIPs.forEach((ip) => console.log(`  Also reachable on your network at: http://${ip}:${port}`));
       console.log(`Owner console: http://localhost:${port}/console/`);
       console.log(`Member app:    http://localhost:${port}/member/  ${lanIPs[0] ? `(from a phone: http://${lanIPs[0]}:${port}/member/)` : ''}`);
+
+      const { httpsServer, httpsPort, tailscaleHostname } = await startHttpsServer(port, lanIPs);
+      runtimeInfo.port = port;
+      runtimeInfo.httpsPort = httpsPort;
+      runtimeInfo.tailscaleHostname = tailscaleHostname;
+      if (httpsPort) {
+        console.log(`Camera-capable HTTPS also available (self-signed - your browser will warn once):`);
+        lanIPs.forEach((ip) => console.log(`  https://${ip}:${httpsPort}`));
+        if (tailscaleHostname) console.log(`  https://${tailscaleHostname}:${httpsPort}  (trusted Tailscale cert - no warning)`);
+      }
+
       startBackupSchedule();
-      resolve({ app, server, port, lanIPs });
+      resolve({ app, server, httpsServer, port, httpsPort, lanIPs });
     });
   });
 }

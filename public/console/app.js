@@ -1597,10 +1597,26 @@
         </div>
         <p style="margin:0 0 10px;font-size:12px;color:var(--muted)">${group.kind === 'tailscale' ? 'Reachable from any device on your Tailscale network, wherever it is.' : 'Reachable from any device on the same wifi/network as this computer.'}</p>
         ${group.links.map(linkRow).join('')}
+        ${group.secureLinks && group.secureLinks.length ? `
+          <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border-soft)">
+            <div style="font-size:11.5px;color:var(--muted-2);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Secure (https) - needed for camera access on a phone</div>
+            <p style="margin:0 0 8px;font-size:12px;color:var(--muted)">The plain links above can't use a phone's camera - browsers block it on any non-https network address. These work, but the browser will show a one-time "connection not private" warning to click through (self-signed certificate).</p>
+            ${group.secureLinks.map(linkRow).join('')}
+          </div>` : ''}
       </section>`));
     });
     if (!sysInfo.remoteLinkGroups.length) {
       pageRoot.appendChild(el(`<div class="empty-state" style="margin-top:16px">No network address found yet - connect this computer to wifi/ethernet (or Tailscale) to get a link other devices can use.</div>`));
+    }
+    if (sysInfo.tailscaleHttps) {
+      pageRoot.appendChild(el(`<section class="card card-pad" style="margin-top:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <h2 style="font-size:14.5px">Over Tailscale (trusted certificate)</h2>
+          <span class="chip" style="background:var(--accent-soft);color:var(--accent-dark)">${esc(sysInfo.tailscaleHttps.hostname)}</span>
+        </div>
+        <p style="margin:0 0 10px;font-size:12px;color:var(--muted)">Your Tailscale network has HTTPS certificates enabled, so these need no warning at all - full camera access from any device on your tailnet.</p>
+        ${sysInfo.tailscaleHttps.links.map(linkRow).join('')}
+      </section>`));
     }
     pageRoot.querySelectorAll('[data-copy-link]').forEach((b) => b.addEventListener('click', async () => {
       try {
