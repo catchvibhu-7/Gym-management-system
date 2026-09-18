@@ -9,6 +9,13 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+// Some machines (VMs, remote desktop sessions, flaky/outdated GPU drivers)
+// crash Chromium's GPU process on ordinary navigation, leaving the window
+// showing a blank frame instead of the new page - "GPU process exited
+// unexpectedly" in the console, then a blank screen on the next tab click.
+// Forcing software rendering means there's no GPU process to crash.
+app.disableHardwareAcceleration();
+
 let mainWindow = null;
 let httpServer = null;
 let boundPort = null;
