@@ -734,6 +734,17 @@
   }
 
   // ---------- Plans ----------
+  // Shown under a plan/pass-type card's price so staff can tell at a glance
+  // whether GST gets added on top at checkout ("+GST") or is already baked
+  // into the sticker price ("GST incl."). Nothing to show if GST isn't
+  // configured at all - there's no tax regime to describe either way.
+  function gstTaglineHtml(gstApplicable) {
+    if (!settingsCache || settingsCache.gst_enabled !== '1') return '';
+    return gstApplicable
+      ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">+GST</div>`
+      : `<div style="font-size:11px;color:var(--muted);margin-top:2px">GST incl.</div>`;
+  }
+
   async function pagePlans() {
     const canManage = ['owner', 'manager'].includes(state.staff.role);
     setTopActions([
@@ -753,6 +764,7 @@
         </div>
         <div style="font-family:'Archivo Black',sans-serif;font-size:20px;margin:12px 0 4px">${esc(p.name)}</div>
         <div style="display:flex;align-items:baseline;gap:5px"><span style="font-family:'Archivo Black',sans-serif;font-size:30px">${esc(p.price)}</span><span style="font-size:12.5px;color:var(--muted)">/ ${esc(p.periodLabel)}</span></div>
+        ${gstTaglineHtml(p.gstApplicable)}
         <p style="font-size:12.5px;color:var(--muted);margin:8px 0;line-height:1.5">${esc(p.desc || '')}</p>
         <div style="font-size:12px;color:var(--muted)">${p.members} members · ${esc(p.share)} of revenue</div>
         ${canManage ? `<div style="display:flex;gap:8px;margin-top:12px">
@@ -773,6 +785,7 @@
           return `<div style="border:1px solid var(--border-soft);border-radius:12px;padding:14px">
             <div style="font-size:12px;color:var(--muted)">${esc(t.name)}</div>
             <div style="font-family:'Archivo Black',sans-serif;font-size:22px;margin-top:5px">${esc(t.price)}</div>
+            ${gstTaglineHtml(t.gstApplicable)}
             <div style="font-size:11.5px;color:var(--muted);margin-top:5px">${sold ? sold.sold : 0} sold this month</div>
             ${canManage ? `<div style="display:flex;gap:8px;margin-top:10px">
               <button class="btn-outline btn-sm" style="flex:1" data-action="edit-daypass-type" data-id="${t.id}">Edit</button>
@@ -1736,17 +1749,36 @@
     const JOINING_FEE_CENTS = 2500;
     const gstEnabled = settingsCache && settingsCache.gst_enabled === '1';
     const gstPct = gstEnabled ? parseFloat(settingsCache.gst_percentage) || 0 : 0;
-    const subtotal = plan.priceCents + JOINING_FEE_CENTS;
-    const gstCents = gstEnabled ? Math.round(subtotal * (gstPct / 100)) : 0;
+
+    // Mirrors settingsStore.applyGst() server-side: the plan's own price
+    // follows its gstApplicable choice (false means that price already
+    // includes GST, so it's backed out for display instead of re-added),
+    // while the joining fee - a separate flat charge, not a "pass" price -
+    // always gets GST added on top as before.
+    let planLineCents = plan.priceCents;
+    let gstLineCents = 0;
+    let totalCents = plan.priceCents + JOINING_FEE_CENTS;
+    if (gstEnabled) {
+      if (plan.gstApplicable) {
+        const g = Math.round(plan.priceCents * (gstPct / 100));
+        gstLineCents += g; totalCents += g;
+      } else {
+        const exclusive = Math.round(plan.priceCents / (1 + gstPct / 100));
+        gstLineCents += plan.priceCents - exclusive;
+        planLineCents = exclusive;
+      }
+      gstLineCents += Math.round(JOINING_FEE_CENTS * (gstPct / 100));
+      totalCents += Math.round(JOINING_FEE_CENTS * (gstPct / 100));
+    }
     const lineItems = [
-      { label: `${plan.name} plan`, amountCents: plan.priceCents },
+      { label: `${plan.name} plan`, amountCents: planLineCents },
       { label: 'Joining fee', amountCents: JOINING_FEE_CENTS },
     ];
-    if (gstEnabled) lineItems.push({ label: `GST (${gstPct}%)`, amountCents: gstCents });
+    if (gstEnabled) lineItems.push({ label: `GST (${gstPct}%)${plan.gstApplicable ? '' : ' · plan incl.'}`, amountCents: gstLineCents });
 
     openCheckoutModal({
       title: 'New member payment',
-      lineItems, totalCents: subtotal + gstCents,
+      lineItems, totalCents,
       onConfirm: async (paymentMethod, gatewayPaymentId) => {
         await api('/members', { method: 'POST', body: {
           name: w.data.name, phone: w.data.phone, email: w.data.email || null,
@@ -1927,6 +1959,10 @@
           <label class="field">Price<input id="dpt-price" type="number" min="0" step="0.01" value="${editing ? (editing.priceCents / 100).toFixed(2) : ''}"></label>
           <label class="field">Visits included<input id="dpt-visits" type="number" min="1" value="${editing?.visits || 1}"></label>
         </div>
+        <label style="display:flex;gap:9px;align-items:flex-start;margin-top:4px;font-size:12.5px;color:#3d4139;line-height:1.5">
+          <input type="checkbox" id="dpt-gst-applicable" style="margin-top:2px" ${editing ? (editing.gstApplicable ? 'checked' : '') : 'checked'}>
+          <span>GST applicable<br><span style="font-size:11px;color:var(--muted)">Unchecked means the price above already includes GST.</span></span>
+        </label>
         <div id="dpt-error" class="login-error hidden" style="margin-top:12px"></div>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-daypass-type" data-id="${typeId || ''}">${editing ? 'Save changes' : 'Add pass type'}</button></div>
@@ -1940,13 +1976,14 @@
     const name = nameEl.value.trim();
     const priceCents = Math.round(parseFloat(priceEl.value) * 100);
     const visits = Number(document.getElementById('dpt-visits').value) || 1;
+    const gstApplicable = document.getElementById('dpt-gst-applicable').checked;
     const errBox = document.getElementById('dpt-error');
     if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
     if (!priceCents || priceCents <= 0) { markInvalid(priceEl, 'Enter a valid price.'); return; }
     const btn = document.querySelector('[data-action="submit-daypass-type"]');
     try {
       await withBusy(btn, () => api(typeId ? `/plans/day-pass-types/${typeId}` : '/plans/day-pass-types', {
-        method: typeId ? 'PATCH' : 'POST', body: { name, priceCents, visits },
+        method: typeId ? 'PATCH' : 'POST', body: { name, priceCents, visits, gstApplicable },
       }));
       closeModal();
       toast(typeId ? 'Pass type updated.' : 'Pass type added.', 'success');
@@ -1971,7 +2008,11 @@
           </label>
         </div>
         <label class="field" style="margin-bottom:12px">Description<input id="plan-desc" value="${esc(editing?.desc || '')}" placeholder="What members get"></label>
-        <label class="field">Tag (optional)<input id="plan-tag" value="${esc(editing?.tag || '')}" placeholder="e.g. Most popular"></label>
+        <label class="field" style="margin-bottom:12px">Tag (optional)<input id="plan-tag" value="${esc(editing?.tag || '')}" placeholder="e.g. Most popular"></label>
+        <label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:#3d4139;line-height:1.5">
+          <input type="checkbox" id="plan-gst-applicable" style="margin-top:2px" ${editing ? (editing.gstApplicable ? 'checked' : '') : 'checked'}>
+          <span>GST applicable<br><span style="font-size:11px;color:var(--muted)">Unchecked means the price above already includes GST.</span></span>
+        </label>
         <div id="plan-error" class="login-error hidden" style="margin-top:12px"></div>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="submit-plan" data-id="${planId || ''}">${editing ? 'Save changes' : 'Add plan'}</button></div>
@@ -1987,6 +2028,7 @@
     const billingPeriod = document.getElementById('plan-period').value;
     const description = document.getElementById('plan-desc').value.trim();
     const tag = document.getElementById('plan-tag').value.trim();
+    const gstApplicable = document.getElementById('plan-gst-applicable').checked;
     const errBox = document.getElementById('plan-error');
     if (!name) { markInvalid(nameEl, 'Name is required.'); return; }
     if (!priceCents || priceCents <= 0) { markInvalid(priceEl, 'Enter a valid price.'); return; }
@@ -1994,7 +2036,7 @@
     try {
       await withBusy(btn, () => api(planId ? `/plans/${planId}` : '/plans', {
         method: planId ? 'PATCH' : 'POST',
-        body: { name, priceCents, billingPeriod, description: description || null, tag: tag || null },
+        body: { name, priceCents, billingPeriod, description: description || null, tag: tag || null, gstApplicable },
       }));
       closeModal();
       toast(planId ? 'Plan updated.' : 'Plan added.', 'success');
@@ -2238,10 +2280,26 @@
         const type = types.find((t) => t.id === selectedType);
         if (!type) { markInvalid(nameEl, 'Pick a pass type.'); return; }
         closeModal();
+        const gstEnabled = settingsCache && settingsCache.gst_enabled === '1';
+        const gstPct = gstEnabled ? parseFloat(settingsCache.gst_percentage) || 0 : 0;
+        let priceLineCents = type.priceCents;
+        let gstLineCents = 0;
+        let totalCents = type.priceCents;
+        if (gstEnabled) {
+          if (type.gstApplicable) {
+            gstLineCents = Math.round(type.priceCents * (gstPct / 100));
+            totalCents += gstLineCents;
+          } else {
+            const exclusive = Math.round(type.priceCents / (1 + gstPct / 100));
+            gstLineCents = type.priceCents - exclusive;
+            priceLineCents = exclusive;
+          }
+        }
+        const lineItems = [{ label: type.name, amountCents: priceLineCents }];
+        if (gstEnabled) lineItems.push({ label: `GST (${gstPct}%)${type.gstApplicable ? '' : ' · incl.'}`, amountCents: gstLineCents });
         openCheckoutModal({
           title: 'Day pass payment',
-          lineItems: [{ label: type.name, amountCents: type.priceCents }],
-          totalCents: type.priceCents,
+          lineItems, totalCents,
           onConfirm: async (paymentMethod, gatewayPaymentId) => {
             const sold = await api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType, paymentMethod, gatewayPaymentId } });
             toast(`Day pass sold to ${name}.`, 'success');
