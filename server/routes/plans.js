@@ -3,6 +3,7 @@ const { db } = require('../db');
 const { requireStaff } = require('../auth');
 const { money, newCode, todayISO, periodInfo, monthlyEquivalentCents, BILLING_PERIODS } = require('../utils');
 const { sendQrSvg } = require('../qr');
+const settingsStore = require('../settingsStore');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -26,7 +27,7 @@ router.get('/', (req, res) => {
     return {
       id: p.id, name: p.name, price: money(p.price_cents), priceCents: p.price_cents,
       billingPeriod: p.billing_period, periodLabel: periodInfo(p.billing_period).label,
-      desc: p.description, tag: p.tag, active: !!p.active,
+      desc: p.description, tag: p.tag, active: !!p.active, gstApplicable: !!p.gst_applicable,
       members: memberCount, share: `${Math.round((monthlyEq / totalRevenue) * 100)}%`,
       cardStyle: 'background:#fff;border:1px solid #e2e3de;border-radius:14px;padding:20px',
       tagStyle: p.tag ? 'display:inline-block;font-size:11px;font-weight:700;background:#e6f2ed;color:#0e5f4a;padding:4px 9px;border-radius:999px' : '',
@@ -37,26 +38,27 @@ router.get('/', (req, res) => {
 });
 
 router.post('/', requireStaff('owner', 'manager'), (req, res) => {
-  const { name, priceCents, billingPeriod = 'monthly', description, tag } = req.body || {};
+  const { name, priceCents, billingPeriod = 'monthly', description, tag, gstApplicable = true } = req.body || {};
   if (!name || !priceCents || priceCents <= 0) return res.status(400).json({ error: 'Name and a positive price are required' });
   if (!BILLING_PERIODS[billingPeriod]) return res.status(400).json({ error: 'Invalid billing period' });
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order),0) m FROM plans').get().m;
   const info = db.prepare(
-    `INSERT INTO plans (name, price_cents, billing_period, description, tag, sort_order) VALUES (?,?,?,?,?,?)`
-  ).run(name, priceCents, billingPeriod, description || null, tag || null, maxOrder + 1);
+    `INSERT INTO plans (name, price_cents, billing_period, description, tag, sort_order, gst_applicable) VALUES (?,?,?,?,?,?,?)`
+  ).run(name, priceCents, billingPeriod, description || null, tag || null, maxOrder + 1, gstApplicable ? 1 : 0);
   res.status(201).json({ id: info.lastInsertRowid });
 });
 
 router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
   const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(req.params.id);
   if (!plan) return res.status(404).json({ error: 'Not found' });
-  const { name, priceCents, billingPeriod, description, tag } = req.body || {};
+  const { name, priceCents, billingPeriod, description, tag, gstApplicable } = req.body || {};
   if (billingPeriod && !BILLING_PERIODS[billingPeriod]) return res.status(400).json({ error: 'Invalid billing period' });
   db.prepare(
-    `UPDATE plans SET name = ?, price_cents = ?, billing_period = ?, description = ?, tag = ? WHERE id = ?`
+    `UPDATE plans SET name = ?, price_cents = ?, billing_period = ?, description = ?, tag = ?, gst_applicable = ? WHERE id = ?`
   ).run(
     name ?? plan.name, priceCents ?? plan.price_cents, billingPeriod ?? plan.billing_period,
-    description ?? plan.description, tag ?? plan.tag, plan.id
+    description ?? plan.description, tag ?? plan.tag,
+    gstApplicable === undefined ? plan.gst_applicable : (gstApplicable ? 1 : 0), plan.id
   );
   res.json({ ok: true });
 });
@@ -76,23 +78,25 @@ router.get('/day-pass-types', (req, res) => {
   const rows = db.prepare(`SELECT * FROM day_pass_types ${includeInactive ? '' : 'WHERE active = 1'} ORDER BY id`).all();
   res.json(rows.map((t) => ({
     id: t.id, name: t.name, price: money(t.price_cents), priceCents: t.price_cents, visits: t.visits, active: !!t.active,
+    gstApplicable: !!t.gst_applicable,
   })));
 });
 
 router.post('/day-pass-types', requireStaff('owner', 'manager'), (req, res) => {
-  const { name, priceCents, visits = 1 } = req.body || {};
+  const { name, priceCents, visits = 1, gstApplicable = true } = req.body || {};
   if (!name || !priceCents || priceCents <= 0) return res.status(400).json({ error: 'Name and a positive price are required' });
-  const info = db.prepare('INSERT INTO day_pass_types (name, price_cents, visits) VALUES (?,?,?)').run(name, priceCents, visits);
+  const info = db.prepare('INSERT INTO day_pass_types (name, price_cents, visits, gst_applicable) VALUES (?,?,?,?)').run(name, priceCents, visits, gstApplicable ? 1 : 0);
   res.status(201).json({ id: info.lastInsertRowid });
 });
 
 router.patch('/day-pass-types/:id', requireStaff('owner', 'manager'), (req, res) => {
   const type = db.prepare('SELECT * FROM day_pass_types WHERE id = ?').get(req.params.id);
   if (!type) return res.status(404).json({ error: 'Not found' });
-  const { name, priceCents, visits } = req.body || {};
+  const { name, priceCents, visits, gstApplicable } = req.body || {};
   if (priceCents !== undefined && priceCents <= 0) return res.status(400).json({ error: 'Price must be positive' });
-  db.prepare('UPDATE day_pass_types SET name = ?, price_cents = ?, visits = ? WHERE id = ?').run(
-    name ?? type.name, priceCents ?? type.price_cents, visits ?? type.visits, type.id
+  db.prepare('UPDATE day_pass_types SET name = ?, price_cents = ?, visits = ?, gst_applicable = ? WHERE id = ?').run(
+    name ?? type.name, priceCents ?? type.price_cents, visits ?? type.visits,
+    gstApplicable === undefined ? type.gst_applicable : (gstApplicable ? 1 : 0), type.id
   );
   res.json({ ok: true });
 });
@@ -120,10 +124,11 @@ router.post('/day-passes', (req, res) => {
   if (!paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
   const type = db.prepare('SELECT * FROM day_pass_types WHERE id = ?').get(typeId);
   if (!type) return res.status(404).json({ error: 'Pass type not found' });
+  const gst = settingsStore.applyGst(type.price_cents, !!type.gst_applicable);
   const info = db.prepare(
     `INSERT INTO day_passes (name, phone, type_id, amount_cents, remaining_visits, qr_code, sold_by_staff_id, valid_date, payment_method, gateway_payment_id)
      VALUES (?,?,?,?,?,?,?,?,?,?)`
-  ).run(name, phone || null, type.id, type.price_cents, type.visits, newCode('DP'), req.staff.id, todayISO(), paymentMethod, gatewayPaymentId || null);
+  ).run(name, phone || null, type.id, gst.totalCents, type.visits, newCode('DP'), req.staff.id, todayISO(), paymentMethod, gatewayPaymentId || null);
   res.status(201).json({ id: info.lastInsertRowid, qrCode: db.prepare('SELECT qr_code FROM day_passes WHERE id=?').get(info.lastInsertRowid).qr_code });
 });
 

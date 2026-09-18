@@ -69,11 +69,26 @@ function currencySymbol() {
 // Adds GST on top of a base amount if enabled - used wherever a charge is
 // created (membership signup, day passes) so the invoice/day-pass amount
 // already reflects tax.
-function applyGst(baseCents) {
+//
+// gstApplicable (default true) is a per-plan/per-pass-type choice, not the
+// global on/off switch above: true means the stored price EXCLUDES GST, so
+// it gets added on top as usual. false means the stored price is already
+// GST-inclusive (e.g. a round advertised number) - GST still needs to be
+// broken out for the itemised bill, but backed OUT of that price rather
+// than added on top, so the customer is never charged it twice.
+function applyGst(baseCents, gstApplicable = true) {
   const enabled = get('gst_enabled') === '1';
   const pct = enabled ? parseFloat(get('gst_percentage')) || 0 : 0;
-  const gstCents = Math.round(baseCents * (pct / 100));
-  return { baseCents, gstEnabled: enabled, gstPercentage: pct, gstCents, totalCents: baseCents + gstCents };
+  if (!enabled || pct <= 0) {
+    return { baseCents, gstEnabled: enabled, gstPercentage: pct, gstCents: 0, totalCents: baseCents, gstApplicable: true };
+  }
+  if (gstApplicable) {
+    const gstCents = Math.round(baseCents * (pct / 100));
+    return { baseCents, gstEnabled: enabled, gstPercentage: pct, gstCents, totalCents: baseCents + gstCents, gstApplicable: true };
+  }
+  const exclusiveCents = Math.round(baseCents / (1 + pct / 100));
+  const gstCents = baseCents - exclusiveCents;
+  return { baseCents: exclusiveCents, gstEnabled: enabled, gstPercentage: pct, gstCents, totalCents: baseCents, gstApplicable: false };
 }
 
 module.exports = { get, getAll, getPublic, set, setMany, currencySymbol, applyGst, DEFAULTS, SECRET_KEYS };

@@ -128,7 +128,12 @@ router.post('/', (req, res) => {
   if (!isTrial && planId) {
     const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
     if (plan) {
-      const gst = settingsStore.applyGst(plan.price_cents + joiningFeeCents);
+      // The plan's own gst_applicable choice only governs the plan's price
+      // (false means that price is already GST-inclusive, so GST is backed
+      // out of it rather than re-added); the joining fee is a separate flat
+      // charge and always follows the normal add-it-on-top behaviour.
+      const planGst = settingsStore.applyGst(plan.price_cents, !!plan.gst_applicable);
+      const feeGst = settingsStore.applyGst(joiningFeeCents, true);
       const modifier = periodInfo(plan.billing_period).dateModifier;
       const membershipId = db.prepare(
         `INSERT INTO memberships (member_id, plan_id, monthly_price_cents, billing_period, joining_fee_cents, start_date, next_charge_date, status)
@@ -137,7 +142,7 @@ router.post('/', (req, res) => {
       db.prepare(
         `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method, gateway_payment_id)
          VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', ?, ?)`
-      ).run(memberId, membershipId, gst.totalCents, paymentMethod, gatewayPaymentId || null);
+      ).run(memberId, membershipId, planGst.totalCents + feeGst.totalCents, paymentMethod, gatewayPaymentId || null);
     }
   }
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);
@@ -152,15 +157,22 @@ router.patch('/:id', (req, res) => {
     const clash = db.prepare('SELECT id FROM members WHERE phone = ? AND id != ?').get(phone, member.id);
     if (clash) return res.status(409).json({ error: 'Another member already uses this phone number' });
   }
-  const nextAccess = accessMethod ?? member.access_method;
+  // `?? member.x` only falls back on null/undefined, so an explicit
+  // `null` sent to clear an optional field (email/emergency contact/notes -
+  // exactly what the Edit details modal sends when a field is blanked out)
+  // was indistinguishable from "field omitted, leave alone" and silently
+  // kept the old value - clearing any of these was impossible from the UI.
+  // `!== undefined` treats an explicit null as "clear it" and only an
+  // omitted key as "leave alone".
+  const nextAccess = accessMethod !== undefined ? accessMethod : member.access_method;
   const needsFob = (nextAccess === 'fob' || nextAccess === 'qr_fob') && !member.fob_code;
   db.prepare(
     `UPDATE members SET name = ?, phone = ?, email = ?, emergency_name = ?, emergency_phone = ?,
        access_method = ?, fob_code = COALESCE(fob_code, ?), notes = ? WHERE id = ?`
   ).run(
-    name ?? member.name, phone ?? member.phone, email ?? member.email,
-    emergencyName ?? member.emergency_name, emergencyPhone ?? member.emergency_phone,
-    nextAccess, needsFob ? newCode('FOB') : null, notes ?? member.notes, member.id
+    name !== undefined ? name : member.name, phone !== undefined ? phone : member.phone, email !== undefined ? email : member.email,
+    emergencyName !== undefined ? emergencyName : member.emergency_name, emergencyPhone !== undefined ? emergencyPhone : member.emergency_phone,
+    nextAccess, needsFob ? newCode('FOB') : null, notes !== undefined ? notes : member.notes, member.id
   );
   res.json({ ok: true });
 });

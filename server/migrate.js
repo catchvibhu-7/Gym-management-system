@@ -71,6 +71,8 @@ function runMigrations(db) {
   ensureColumn(db, 'members', 'fob_fee_paid', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'members', 'pre_freeze_access_method', 'TEXT');
   ensureColumn(db, 'day_pass_types', 'active', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'plans', 'gst_applicable', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'day_pass_types', 'gst_applicable', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'staff', 'staff_type', 'TEXT');
   ensureColumn(db, 'staff', 'pt_rate_cents', 'INTEGER');
   ensureColumn(db, 'day_passes', 'payment_method', 'TEXT');
