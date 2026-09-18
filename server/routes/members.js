@@ -99,11 +99,13 @@ router.get('/:id', (req, res) => {
 
 router.post('/', (req, res) => {
   const {
-    name, phone, email, emergencyName, emergencyPhone, planId, joiningFeeCents = 2500,
+    name, phone, email, emergencyName, emergencyPhone, planId,
     accessMethod = 'qr', isTrial = false, paymentMethod, gatewayPaymentId,
+    chargeAdmissionFee = false, chargeFobFee = false,
   } = req.body || {};
   if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
-  if (!isTrial && planId && !paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
+  const hasCharge = !isTrial && (planId || chargeAdmissionFee || chargeFobFee);
+  if (hasCharge && !paymentMethod) return res.status(400).json({ error: 'A payment method is required.' });
   const existing = db.prepare('SELECT id FROM members WHERE phone = ?').get(phone);
   if (existing) return res.status(409).json({ error: 'A member with this phone already exists' });
 
@@ -112,38 +114,56 @@ router.post('/', (req, res) => {
   // record with a QR-only door code that expires after the configured
   // trial length. Fob access and a paid plan are earned by actually joining.
   const finalAccessMethod = isTrial ? 'qr' : accessMethod;
+  const wantsFob = finalAccessMethod === 'fob' || finalAccessMethod === 'qr_fob';
   const trialDays = parseInt(settingsStore.get('trial_duration_days'), 10) || 3;
   const trialEndsAt = isTrial ? db.prepare(`SELECT date('now', ?) d`).get(`+${trialDays} days`).d : null;
+
+  // "Admission fee" and "joining fee" were the same one-time charge under
+  // two names - now the one configurable amount (admission_fee_cents),
+  // opt-in per signup instead of a hardcoded always-on charge. Charging it
+  // waives the fob fee, same rule /fob/regenerate already enforces.
+  const admissionFeeApplies = !isTrial && !!chargeAdmissionFee;
+  const admissionFeeCents = admissionFeeApplies ? (parseInt(settingsStore.get('admission_fee_cents'), 10) || 0) : 0;
+  const fobFeeApplies = !isTrial && wantsFob && !!chargeFobFee && !admissionFeeApplies;
+  const fobFeeCents = fobFeeApplies ? (parseInt(settingsStore.get('fob_fee_cents'), 10) || 0) : 0;
+
   const info = db.prepare(
-    `INSERT INTO members (name, phone, email, emergency_name, emergency_phone, status, access_method, fob_code, qr_code, pin_hash, joined_at, trial_ends_at)
-     VALUES (?,?,?,?,?, ?, ?, ?, ?, ?, datetime('now'), ?)`
+    `INSERT INTO members (name, phone, email, emergency_name, emergency_phone, status, access_method, fob_code, qr_code, pin_hash, joined_at, trial_ends_at, admission_fee_paid, fob_fee_paid)
+     VALUES (?,?,?,?,?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)`
   ).run(
     name, phone, email || null, emergencyName || null, emergencyPhone || null,
     isTrial ? 'trial' : 'active', finalAccessMethod,
-    finalAccessMethod === 'fob' || finalAccessMethod === 'qr_fob' ? newCode('FOB') : null,
-    newCode('QR'), hashPassword(last4), trialEndsAt
+    wantsFob ? newCode('FOB') : null,
+    newCode('QR'), hashPassword(last4), trialEndsAt,
+    admissionFeeApplies ? 1 : 0, fobFeeCents > 0 ? 1 : 0
   );
 
   const memberId = info.lastInsertRowid;
+  let membershipId = null;
+  let planGstTotal = 0;
   if (!isTrial && planId) {
     const plan = db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
     if (plan) {
       // The plan's own gst_applicable choice only governs the plan's price
       // (false means that price is already GST-inclusive, so GST is backed
-      // out of it rather than re-added); the joining fee is a separate flat
-      // charge and always follows the normal add-it-on-top behaviour.
+      // out of it rather than re-added); the admission/fob fees are separate
+      // flat charges and always follow the normal add-it-on-top behaviour.
       const planGst = settingsStore.applyGst(plan.price_cents, !!plan.gst_applicable);
-      const feeGst = settingsStore.applyGst(joiningFeeCents, true);
+      planGstTotal = planGst.totalCents;
       const modifier = periodInfo(plan.billing_period).dateModifier;
-      const membershipId = db.prepare(
+      membershipId = db.prepare(
         `INSERT INTO memberships (member_id, plan_id, monthly_price_cents, billing_period, joining_fee_cents, start_date, next_charge_date, status)
          VALUES (?,?,?,?,?, date('now'), date('now',?), 'active')`
-      ).run(memberId, plan.id, plan.price_cents, plan.billing_period, joiningFeeCents, modifier).lastInsertRowid;
-      db.prepare(
-        `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method, gateway_payment_id)
-         VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', ?, ?)`
-      ).run(memberId, membershipId, planGst.totalCents + feeGst.totalCents, paymentMethod, gatewayPaymentId || null);
+      ).run(memberId, plan.id, plan.price_cents, plan.billing_period, admissionFeeCents, modifier).lastInsertRowid;
     }
+  }
+  const feesGstTotal = settingsStore.applyGst(admissionFeeCents + fobFeeCents, true).totalCents;
+  const invoiceTotal = planGstTotal + feesGstTotal;
+  if (!isTrial && invoiceTotal > 0) {
+    db.prepare(
+      `INSERT INTO invoices (member_id, membership_id, amount_cents, due_date, attempted_at, paid_at, status, payment_method, gateway_payment_id)
+       VALUES (?,?,?, date('now'), date('now'), date('now'), 'paid', ?, ?)`
+    ).run(memberId, membershipId, invoiceTotal, paymentMethod, gatewayPaymentId || null);
   }
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId);
   res.status(201).json({ id: memberId, name: member.name, qrCode: member.qr_code });
@@ -246,7 +266,10 @@ router.post('/:id/fob/regenerate', (req, res) => {
   db.prepare('UPDATE members SET fob_code = ?, fob_suspended = 0, access_method = ? WHERE id = ?').run(code, nextAccess, member.id);
 
   let invoice = null;
-  if (chargeFee && !member.admission_fee_paid) {
+  // Waived if the admission fee already covers it, or if the fob fee
+  // itself was already paid once - re-issuing a lost/replaced fob for an
+  // already-paid member shouldn't charge them a second time.
+  if (chargeFee && !member.admission_fee_paid && !member.fob_fee_paid) {
     const feeCents = parseInt(settingsStore.get('fob_fee_cents'), 10) || 0;
     if (feeCents > 0) {
       const gst = settingsStore.applyGst(feeCents);

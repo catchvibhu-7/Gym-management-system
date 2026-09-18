@@ -35,6 +35,50 @@
     setTimeout(remove, 4500);
   }
 
+  // ---------- QR download/share (member QR, day-pass QR) ----------
+  async function downloadQrImage(url, filename) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('Could not load the QR code.');
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function shareQrImage(url, filename, title) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('Could not load the QR code.');
+      const blob = await resp.blob();
+      const file = new File([blob], filename, { type: blob.type || 'image/svg+xml' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title });
+      } else if (navigator.share) {
+        await navigator.share({ title, url: location.origin + url });
+      } else {
+        await downloadQrImage(url, filename);
+        toast("Sharing isn't supported in this browser — downloaded instead.", 'info');
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') toast(err.message, 'error');
+    }
+  }
+  function qrActionsHtml() {
+    return `<div style="display:flex;gap:8px;margin-top:8px">
+      <button type="button" class="btn-outline btn-sm" style="flex:1" data-action="download-qr">Download</button>
+      <button type="button" class="btn-outline btn-sm" style="flex:1" data-action="share-qr">Share</button>
+    </div>`;
+  }
+  function bindQrActions(root, url, filename, title) {
+    const dl = root.querySelector('[data-action="download-qr"]');
+    if (dl) dl.addEventListener('click', () => downloadQrImage(url, filename));
+    const sh = root.querySelector('[data-action="share-qr"]');
+    if (sh) sh.addEventListener('click', () => shareQrImage(url, filename, title));
+  }
+
   // ---------- Confirm dialog (replaces window.confirm) ----------
   function confirmDialog({ title = 'Are you sure?', body = '', confirmLabel = 'Confirm', danger = false } = {}) {
     return new Promise((resolve) => {
@@ -1678,7 +1722,7 @@
   }
 
   function openWizard() {
-    state.wizard = { step: 1, data: { name: '', phone: '', email: '', emergencyName: '', emergencyPhone: '', planId: null, accessMethod: 'qr', isTrial: false }, plans: [], trialDays: 3 };
+    state.wizard = { step: 1, data: { name: '', phone: '', email: '', emergencyName: '', emergencyPhone: '', planId: null, accessMethod: 'qr', isTrial: false, chargeAdmissionFee: true, chargeFobFee: true }, plans: [], trialDays: 3 };
     Promise.all([api('/plans'), api('/settings')]).then(([plans, settings]) => {
       state.wizard.plans = plans;
       state.wizard.trialDays = Number(settings.trial_duration_days) || 3;
@@ -1735,12 +1779,28 @@
         body.innerHTML = `<div class="pick-btn selected" style="pointer-events:none"><span style="display:block;font-weight:700;font-size:13.5px">QR only</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Trial members get a QR code only - no fob.</span></div>
         <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">No plan or charge yet. Access expires automatically on ${trialEndLabel} unless they join a plan first.</div>`;
       } else {
+        const admissionFeeCents = Number(settingsCache?.admission_fee_cents) || 0;
+        const fobFeeCents = Number(settingsCache?.fob_fee_cents) || 0;
+        const sym = settingsCache?.currency_symbol || '$';
+        const wantsFob = w.data.accessMethod === 'qr_fob';
+        const fobWaived = w.data.chargeAdmissionFee;
         body.innerHTML = `<div class="grid-2">
           <button class="pick-btn ${w.data.accessMethod === 'qr' ? 'selected' : ''}" data-access="qr"><span style="display:block;font-weight:700;font-size:13.5px">QR only</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Member shows a code from their phone.</span></button>
-          <button class="pick-btn ${w.data.accessMethod === 'qr_fob' ? 'selected' : ''}" data-access="qr_fob"><span style="display:block;font-weight:700;font-size:13.5px">QR + fob</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Also issue a physical fob at the desk.</span></button>
+          <button class="pick-btn ${wantsFob ? 'selected' : ''}" data-access="qr_fob"><span style="display:block;font-weight:700;font-size:13.5px">QR + fob</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Also issue a physical fob at the desk.</span></button>
         </div>
-        <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">First charge runs today. The membership is created as soon as you save.</div>`;
+        <div style="margin-top:16px;background:var(--bg);border-radius:10px;padding:14px;font-size:12.5px;color:#3d4139;line-height:1.6">First charge runs today. The membership is created as soon as you save.</div>
+        <label style="display:flex;gap:9px;align-items:flex-start;margin-top:14px;font-size:12.5px;color:#3d4139;line-height:1.5">
+          <input type="checkbox" id="wz-admission-fee" style="margin-top:2px" ${w.data.chargeAdmissionFee ? 'checked' : ''}>
+          <span>Charge admission fee (${sym}${(admissionFeeCents / 100).toFixed(0)})<br><span style="font-size:11px;color:var(--muted)">One-time fee. Also waives any fob fee below.</span></span>
+        </label>
+        ${wantsFob ? `<label style="display:flex;gap:9px;align-items:flex-start;margin-top:10px;font-size:12.5px;${fobWaived ? 'color:var(--muted)' : 'color:#3d4139'};line-height:1.5">
+          <input type="checkbox" id="wz-fob-fee" style="margin-top:2px" ${fobWaived ? 'disabled' : (w.data.chargeFobFee ? 'checked' : '')}>
+          <span>${fobWaived ? 'Fob fee waived (admission fee covers it)' : `Charge fob fee (${sym}${(fobFeeCents / 100).toFixed(0)}) for the new fob`}</span>
+        </label>` : ''}`;
         body.querySelectorAll('[data-access]').forEach((b) => b.addEventListener('click', () => { w.data.accessMethod = b.dataset.access; renderWizard(); }));
+        document.getElementById('wz-admission-fee').addEventListener('change', (e) => { w.data.chargeAdmissionFee = e.target.checked; renderWizard(); });
+        const fobFeeEl = document.getElementById('wz-fob-fee');
+        if (fobFeeEl) fobFeeEl.addEventListener('change', (e) => { w.data.chargeFobFee = e.target.checked; });
       }
       footer.innerHTML = `<button class="btn" data-action="wizard-back">Back</button>
         <span style="margin-left:auto"></span><button class="btn btn-primary" data-action="wizard-submit">Add member</button>`;
@@ -1809,18 +1869,24 @@
 
     const plan = w.plans.find((p) => p.id === w.data.planId);
     if (!plan) { if (hint) hint.textContent = 'Pick a plan first.'; return; }
-    const JOINING_FEE_CENTS = 2500;
     const gstEnabled = settingsCache && settingsCache.gst_enabled === '1';
     const gstPct = gstEnabled ? parseFloat(settingsCache.gst_percentage) || 0 : 0;
+    // "Admission fee" and "joining fee" were the same one-time charge under
+    // two names - this is the one configurable amount (Settings > General),
+    // opt-in per signup instead of a hardcoded always-on charge. Charging it
+    // waives the fob fee below, same rule Manage Access already used.
+    const admissionFeeCents = w.data.chargeAdmissionFee ? (Number(settingsCache?.admission_fee_cents) || 0) : 0;
+    const fobFeeApplies = w.data.accessMethod === 'qr_fob' && w.data.chargeFobFee && !w.data.chargeAdmissionFee;
+    const fobFeeCents = fobFeeApplies ? (Number(settingsCache?.fob_fee_cents) || 0) : 0;
 
     // Mirrors settingsStore.applyGst() server-side: the plan's own price
     // follows its gstApplicable choice (false means that price already
     // includes GST, so it's backed out for display instead of re-added),
-    // while the joining fee - a separate flat charge, not a "pass" price -
-    // always gets GST added on top as before.
+    // while the admission/fob fees - flat charges, not "pass" prices -
+    // always get GST added on top as before.
     let planLineCents = plan.priceCents;
     let gstLineCents = 0;
-    let totalCents = plan.priceCents + JOINING_FEE_CENTS;
+    let totalCents = plan.priceCents + admissionFeeCents + fobFeeCents;
     if (gstEnabled) {
       if (plan.gstApplicable) {
         const g = Math.round(plan.priceCents * (gstPct / 100));
@@ -1830,13 +1896,12 @@
         gstLineCents += plan.priceCents - exclusive;
         planLineCents = exclusive;
       }
-      gstLineCents += Math.round(JOINING_FEE_CENTS * (gstPct / 100));
-      totalCents += Math.round(JOINING_FEE_CENTS * (gstPct / 100));
+      const feesGst = Math.round((admissionFeeCents + fobFeeCents) * (gstPct / 100));
+      gstLineCents += feesGst; totalCents += feesGst;
     }
-    const lineItems = [
-      { label: `${plan.name} plan`, amountCents: planLineCents },
-      { label: 'Joining fee', amountCents: JOINING_FEE_CENTS },
-    ];
+    const lineItems = [{ label: `${plan.name} plan`, amountCents: planLineCents }];
+    if (admissionFeeCents) lineItems.push({ label: 'Admission fee', amountCents: admissionFeeCents });
+    if (fobFeeCents) lineItems.push({ label: 'Fob fee', amountCents: fobFeeCents });
     if (gstEnabled) lineItems.push({ label: `GST (${gstPct}%)${plan.gstApplicable ? '' : ' · plan incl.'}`, amountCents: gstLineCents });
 
     openCheckoutModal({
@@ -1847,6 +1912,7 @@
           name: w.data.name, phone: w.data.phone, email: w.data.email || null,
           emergencyName: w.data.emergencyName || null, planId: w.data.planId, accessMethod: w.data.accessMethod,
           isTrial: false, paymentMethod, gatewayPaymentId,
+          chargeAdmissionFee: w.data.chargeAdmissionFee, chargeFobFee: w.data.chargeFobFee,
         } });
         toast(`${w.data.name} added.`, 'success');
         if (state.route === 'members' || state.route === 'today') renderPage(state.route);
@@ -1875,6 +1941,7 @@
             <button class="btn-outline btn-sm" style="flex:1" data-action="regenerate-qr" data-id="${m.id}">Generate new</button>
             <button class="btn-outline btn-sm" style="flex:1" data-action="${m.qrSuspended ? 'resume-qr' : 'suspend-qr'}" data-id="${m.id}">${m.qrSuspended ? 'Resume' : 'Suspend'}</button>
           </div>
+          ${qrActionsHtml()}
         </div>
         <div style="border:1px solid var(--border-soft);border-radius:10px;padding:14px;margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
@@ -1882,9 +1949,9 @@
             <span class="chip" style="margin-left:auto;${!m.fobCode ? 'background:var(--neutral-bg);color:var(--neutral-fg)' : m.fobSuspended ? 'background:var(--danger-bg);color:var(--danger-fg)' : 'background:var(--accent-soft);color:var(--accent-dark)'}">${!m.fobCode ? 'Not issued' : m.fobSuspended ? 'Suspended' : 'Active'}</span>
           </div>
           ${m.fobCode ? `<div class="mono" style="font-size:12px;background:var(--bg);border-radius:8px;padding:10px 12px;margin-bottom:10px;text-align:center">${esc(m.fobCode)}</div>` : `<p style="font-size:12px;color:var(--muted);margin:0 0 10px">This member has no fob yet.</p>`}
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px;${m.admissionFeePaid ? 'color:var(--muted)' : ''}">
-            <input type="checkbox" id="access-charge-fob-fee" ${m.admissionFeePaid ? 'disabled' : 'checked'}>
-            ${m.admissionFeePaid ? 'Fob fee waived (admission fee already paid)' : `Charge fob fee (${settingsCache?.currency_symbol || ''}${((settingsCache?.fob_fee_cents || 0) / 100).toFixed(0)}) for a new fob`}
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:10px;${m.admissionFeePaid || m.fobFeePaid ? 'color:var(--muted)' : ''}">
+            <input type="checkbox" id="access-charge-fob-fee" ${m.admissionFeePaid || m.fobFeePaid ? 'disabled' : 'checked'}>
+            ${m.admissionFeePaid ? 'Fob fee waived (admission fee already paid)' : m.fobFeePaid ? 'Fob fee already paid — re-issuing is free' : `Charge fob fee (${settingsCache?.currency_symbol || ''}${((settingsCache?.fob_fee_cents || 0) / 100).toFixed(0)}) for a new fob`}
           </label>
           <div style="display:flex;gap:8px">
             <button class="btn-outline btn-sm" style="flex:1" data-action="regenerate-fob" data-id="${m.id}">${m.fobCode ? 'Generate new' : 'Issue a fob'}</button>
@@ -1901,6 +1968,7 @@
       </div>
     </div></div>`);
     modalRoot.appendChild(overlay);
+    bindQrActions(overlay, `/api/members/${m.id}/qr-code.svg`, `${m.name.replace(/\s+/g, '-')}-qr.svg`, `${m.name}'s door QR code`);
   }
 
   async function reloadAccessModal() {
@@ -2389,11 +2457,13 @@
         <div style="text-align:center;background:#fff;border-radius:8px;padding:10px">
           <img src="/api/plans/day-passes/${id}/qr-code.svg" alt="Day pass QR code" style="width:180px;height:180px">
         </div>
+        ${qrActionsHtml()}
         <p style="font-size:12px;color:var(--muted);text-align:center;margin-top:10px">Show this to the kiosk camera or print it for ${esc(name)} to scan on the way in.</p>
       </div>
       <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="close-modal">Done</button></div>
     </div></div>`);
     modalRoot.appendChild(overlay);
+    bindQrActions(overlay, `/api/plans/day-passes/${id}/qr-code.svg`, `${name.replace(/\s+/g, '-')}-day-pass-qr.svg`, `${name}'s day pass QR code`);
   }
 
   const WORKOUT_SECTIONS = [['warmup', 'Warm up'], ['workout', 'Workout'], ['stretch', 'Post stretch']];
