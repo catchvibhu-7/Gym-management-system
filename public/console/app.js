@@ -1644,7 +1644,7 @@
             <span style="font-family:'Archivo Black',sans-serif;font-size:18px">Free</span></button>
         ${w.plans.map((p) => `<button class="pick-btn ${!w.data.isTrial && w.data.planId === p.id ? 'selected' : ''}" data-plan="${p.id}">
             <span style="text-align:left;flex:1"><span style="display:block;font-size:13.5px;font-weight:700">${esc(p.name)}</span><span style="display:block;font-size:12px;color:var(--muted);margin-top:2px">${esc(p.desc || '')}</span></span>
-            <span style="font-family:'Archivo Black',sans-serif;font-size:18px">${esc(p.price)}</span></button>`).join('')}
+            <span style="text-align:right"><span style="font-family:'Archivo Black',sans-serif;font-size:18px">${esc(p.price)}</span><span style="display:block;font-size:11px;color:var(--muted)">/ ${esc(p.periodLabel)}</span></span></button>`).join('')}
       </div>`;
       footer.innerHTML = `<button class="btn" data-action="wizard-back">Back</button>
         <span style="margin-left:auto"></span><button class="btn btn-primary" data-action="wizard-next">Continue</button>`;
@@ -2242,13 +2242,36 @@
           lineItems: [{ label: type.name, amountCents: type.priceCents }],
           totalCents: type.priceCents,
           onConfirm: async (paymentMethod, gatewayPaymentId) => {
-            await api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType, paymentMethod, gatewayPaymentId } });
+            const sold = await api('/plans/day-passes', { method: 'POST', body: { name, phone: phone || null, typeId: selectedType, paymentMethod, gatewayPaymentId } });
             toast(`Day pass sold to ${name}.`, 'success');
             if (state.route === 'plans') renderPage('plans');
+            // openCheckoutModal's own success handler calls closeModal()
+            // right after this resolves, which would wipe out a QR modal
+            // opened here immediately - defer to the next tick so it shows
+            // up after that clear instead of underneath it.
+            setTimeout(() => showDayPassQr(name, sold.id), 0);
           },
         });
       });
     });
+  }
+
+  // The day pass's QR code is the only thing that lets the kiosk check this
+  // walk-in in later - without showing it here (to screenshot or print),
+  // the pass would be unusable at the door.
+  function showDayPassQr(name, id) {
+    modalRoot.innerHTML = '';
+    const overlay = el(`<div class="modal-overlay" id="daypass-qr-overlay"><div class="modal modal-sm">
+      <div class="modal-header"><div><h2>Day pass ready</h2><p>${esc(name)}</p></div><button class="modal-close" data-action="close-modal">×</button></div>
+      <div class="modal-body">
+        <div style="text-align:center;background:#fff;border-radius:8px;padding:10px">
+          <img src="/api/plans/day-passes/${id}/qr-code.svg" alt="Day pass QR code" style="width:180px;height:180px">
+        </div>
+        <p style="font-size:12px;color:var(--muted);text-align:center;margin-top:10px">Show this to the kiosk camera or print it for ${esc(name)} to scan on the way in.</p>
+      </div>
+      <div class="modal-footer"><button class="btn btn-primary" style="width:100%" data-action="close-modal">Done</button></div>
+    </div></div>`);
+    modalRoot.appendChild(overlay);
   }
 
   function openWorkoutPlanModal(memberId) {
@@ -2430,7 +2453,7 @@
   // ---------- Global click delegation ----------
   document.addEventListener('click', (e) => {
     const a = e.target.closest('[data-action]');
-    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay', 'checkout-overlay', 'facility-overlay', 'pt-session-overlay'];
+    const OVERLAY_IDS = ['wizard-overlay', 'daypass-overlay', 'daypass-qr-overlay', 'wp-overlay', 'staff-overlay', 'plan-overlay', 'class-overlay', 'session-overlay', 'member-edit-overlay', 'daypass-type-overlay', 'access-overlay', 'automation-channels-overlay', 'checkout-overlay', 'facility-overlay', 'pt-session-overlay'];
     if (!a) {
       if (OVERLAY_IDS.includes(e.target.id)) closeModal();
       return;

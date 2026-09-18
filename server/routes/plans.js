@@ -2,6 +2,7 @@ const express = require('express');
 const { db } = require('../db');
 const { requireStaff } = require('../auth');
 const { money, newCode, todayISO, periodInfo, monthlyEquivalentCents, BILLING_PERIODS } = require('../utils');
+const { sendQrSvg } = require('../qr');
 
 const router = express.Router();
 router.use(requireStaff());
@@ -124,6 +125,16 @@ router.post('/day-passes', (req, res) => {
      VALUES (?,?,?,?,?,?,?,?,?,?)`
   ).run(name, phone || null, type.id, type.price_cents, type.visits, newCode('DP'), req.staff.id, todayISO(), paymentMethod, gatewayPaymentId || null);
   res.status(201).json({ id: info.lastInsertRowid, qrCode: db.prepare('SELECT qr_code FROM day_passes WHERE id=?').get(info.lastInsertRowid).qr_code });
+});
+
+// Mirrors GET /members/:id/qr-code.svg - the day pass's qr_code is what
+// /api/checkins/scan actually matches against, but until now nothing ever
+// rendered it, so a sold day pass had no scannable code the desk could show
+// or print for the walk-in to use at the kiosk.
+router.get('/day-passes/:id/qr-code.svg', (req, res) => {
+  const pass = db.prepare('SELECT qr_code FROM day_passes WHERE id = ?').get(req.params.id);
+  if (!pass) return res.status(404).end();
+  sendQrSvg(res, pass.qr_code);
 });
 
 router.get('/day-passes/summary', (req, res) => {
