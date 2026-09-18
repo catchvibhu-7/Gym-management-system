@@ -1800,11 +1800,32 @@
     const payConfig = await api('/payments/config').catch(() => ({ provider: 'none' }));
     const razorpayReady = payConfig.provider === 'razorpay' && payConfig.ready && typeof window.Razorpay === 'function';
     modalRoot.innerHTML = '';
+    // totalCents is always the final GST-inclusive amount by the time it
+    // reaches here (every caller already ran it through the server's
+    // applyGst before display) - backing GST out of it for the breakdown
+    // is display-only and never changes what's actually charged, same
+    // math settingsStore.applyGst(total, false) does server-side.
+    const gstEnabled = settingsCache?.gst_enabled === '1' || settingsCache?.gst_enabled === true;
+    const gstPct = parseFloat(settingsCache?.gst_percentage) || 0;
+    const showGst = gstEnabled && gstPct > 0;
+    // Each line item's own amount is shown pre-GST (backed out the same
+    // way) so it doesn't look like it contradicts the subtotal below it -
+    // the actual GST line is the one place tax appears, not baked
+    // invisibly into every row.
+    const displayLineItems = lineItems.map((li) => ({
+      ...li, displayCents: showGst ? Math.round(li.amountCents / (1 + gstPct / 100)) : li.amountCents,
+    }));
+    const subtotalCents = showGst ? Math.round(totalCents / (1 + gstPct / 100)) : totalCents;
+    const gstCents = showGst ? totalCents - subtotalCents : 0;
     const overlay = el(`<div class="modal-overlay" id="checkout-overlay"><div class="modal modal-sm">
       <div class="modal-header"><div><h2>${esc(title)}</h2><p>Itemised bill</p></div><button class="modal-close" data-action="close-modal">×</button></div>
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
-          ${lineItems.map((li) => `<div class="calc-row"><span style="color:var(--muted)">${esc(li.label)}</span><span>${esc(formatMoney(li.amountCents))}</span></div>`).join('')}
+          ${displayLineItems.map((li) => `<div class="calc-row"><span style="color:var(--muted)">${esc(li.label)}</span><span>${esc(formatMoney(li.displayCents))}</span></div>`).join('')}
+          ${showGst ? `
+            <div class="calc-row" style="border-top:1px solid var(--border-soft);padding-top:10px;margin-top:2px"><span style="color:var(--muted)">Subtotal</span><span>${esc(formatMoney(subtotalCents))}</span></div>
+            <div class="calc-row"><span style="color:var(--muted)">GST (${gstPct}%)</span><span>${esc(formatMoney(gstCents))}</span></div>
+          ` : ''}
           <div class="calc-row" style="border-top:1px solid var(--border-soft);padding-top:10px;margin-top:2px;font-weight:700;font-size:15px"><span>Total</span><span>${esc(formatMoney(totalCents))}</span></div>
         </div>
         <div id="checkout-error" class="login-error hidden" style="margin-bottom:12px"></div>

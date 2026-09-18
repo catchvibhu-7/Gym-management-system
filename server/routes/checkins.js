@@ -171,8 +171,11 @@ router.post('/scan', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
 
 // Denied taps for a real (frozen/cancelled/expired-trial) membership reason
 // get logged here so the owner sees them even if nobody was watching the
-// kiosk when it happened - see toggleMemberCheckin above.
-router.get('/alerts', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+// kiosk when it happened - see toggleMemberCheckin above. This is Today-
+// dashboard-only data (member names + why they were denied), never read by
+// the kiosk UI itself - default requireStaff() deliberately excludes
+// 'kiosk'/'admin' so a shared door terminal can't be used to browse it.
+router.get('/alerts', requireStaff(), (req, res) => {
   const rows = db.prepare(
     `SELECT a.id, a.method, a.reason, a.created_at, m.id member_id, m.name member_name
      FROM access_alerts a LEFT JOIN members m ON m.id = a.member_id
@@ -181,12 +184,12 @@ router.get('/alerts', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
   res.json(rows);
 });
 
-router.post('/alerts/:id/ack', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+router.post('/alerts/:id/ack', requireStaff(), (req, res) => {
   db.prepare('UPDATE access_alerts SET acknowledged = 1 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
-router.post('/alerts/ack-all', requireStaff(...ALL_STAFF_ROLES), (req, res) => {
+router.post('/alerts/ack-all', requireStaff(), (req, res) => {
   db.prepare('UPDATE access_alerts SET acknowledged = 1 WHERE acknowledged = 0').run();
   res.json({ ok: true });
 });
