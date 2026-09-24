@@ -3254,6 +3254,18 @@
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       let scanning = true;
       kioskRoot._stopCameraScan = () => { scanning = false; stream.getTracks().forEach((t) => t.stop()); };
+      // A recognized (or recognized-but-denied) scan ends in
+      // renderKioskResult(), which itself calls kioskRoot._stopCameraScan()
+      // to end the loop below - so this loop only needs to stop itself, it
+      // never decides on its own that a decode was "good enough" to turn the
+      // camera off. An unrecognized code just reports the error and keeps
+      // scanning - the member/staff should be able to try again (a bent
+      // fob printout, a stale QR, wrong lighting) without touching a
+      // physical toggle. lastAttempted skips re-submitting the exact same
+      // still-in-frame code on every 200ms tick while it's held up - it
+      // resets the moment the frame no longer decodes, so the same code can
+      // be retried once it's shown again.
+      let lastAttempted = null;
       (async function loop() {
         while (scanning) {
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth) {
@@ -3263,9 +3275,12 @@
             const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const code = window.jsQR(frame.data, frame.width, frame.height, { inversionAttempts: 'dontInvert' });
             if (code && code.data) {
-              stopCameraScan();
-              await doScan(code.data);
-              return;
+              if (code.data !== lastAttempted) {
+                lastAttempted = code.data;
+                await doScan(code.data, 'camera');
+              }
+            } else {
+              lastAttempted = null;
             }
           }
           await new Promise((r) => setTimeout(r, 200));
