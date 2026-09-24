@@ -1,4 +1,24 @@
-// Idempotent demo-data seed. Safe to run every boot: skips if staff already exist.
+// Bootstraps a fresh install: skips entirely if staff already exist (so
+// it's safe to call unconditionally on every boot). Two tiers:
+//   1. Always seeded - the accounts and fixed config every real install
+//      needs regardless of whether it's a paying customer's clean install
+//      or a developer's local copy: the 'admin'/'systemadmin' bootstrap
+//      accounts, and the five automation rows (there is no "add
+//      automation" route - Settings > Notifications only lets you
+//      toggle/edit these five, so without seeding them that page would be
+//      permanently empty with no way to populate it - these are real
+//      default configuration, not sample content).
+//   2. Only with SEED_DEMO_DATA=1 - fake coaches/desk/manager staff, fake
+//      plans/day-pass types, ~60 fake members with invoices/checkins, and
+//      fake classes/sessions/bookings. This is sample content for local
+//      development and screenshots only; a real customer's clean install
+//      must never see fabricated members/staff on first boot. `npm run
+//      dev`/`npm run dev:server` set this env var so local development
+//      keeps the populated experience; a plain `npm start`, the packaged
+//      Electron app, and the installer built for a customer do not, so
+//      they boot with a genuinely empty gym for the setup wizard to fill in.
+//      Running `node server/seed.js` directly always seeds demo data too
+//      (that's the point of running it by hand).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -12,12 +32,14 @@ const LAST_NAMES = ['Raghavan','Delaney','Tanabe','Rueda','Lindqvist','Obi','Vol
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-function seed() {
+function seed(opts = {}) {
   const staffCount = db.prepare('SELECT COUNT(*) c FROM staff').get().c;
   if (staffCount > 0) {
     console.log('Seed skipped: data already present.');
     return;
   }
+
+  const seedDemoData = opts.demo !== undefined ? opts.demo : process.env.SEED_DEMO_DATA === '1';
 
   db.exec('BEGIN');
   try {
@@ -50,6 +72,27 @@ function seed() {
     db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'full')`
     ).run('System Admin (vendor support)', 'systemadmin', systemAdminEmail, null, hashPassword(systemAdminPassword));
+
+    // --- Automations: fixed starter rows every install needs, demo data or
+    // not - see the top-of-file comment for why these aren't gated the same
+    // way the fake members/classes below are.
+    const automations = [
+      ['Card about to expire', 'Texts members 7 days before their card on file expires with a link to update it.', 'Card expires in 7 days', 'SMS'],
+      ['Payment failed', 'Sends a payment link the same day a charge fails, then again after 3 days.', 'Charge fails', 'SMS'],
+      ['Trial ending', 'Reminds a trial member the day before it ends and offers the Unlimited plan.', '1 day before trial ends', 'SMS'],
+      ['Renewal in 3 days', 'Confirms the upcoming charge amount and date.', '3 days before next charge', 'Email'],
+      ['Win-back at 14 days', 'Nudges a member who has not checked in for 14 days.', 'No visit in 14 days', 'SMS'],
+    ];
+    const insertAutomation = db.prepare(
+      `INSERT INTO automations (name, description, trigger_desc, channel, enabled, sort_order) VALUES (?,?,?,?,?,?)`
+    );
+    automations.forEach((a, i) => insertAutomation.run(a[0], a[1], a[2], a[3], 1, i));
+
+    let demoMemberCount = 0;
+    let demoClassCount = 0;
+    if (!seedDemoData) {
+      console.log('Demo data skipped (this is a real clean install). Set SEED_DEMO_DATA=1 to seed sample staff/members/classes for local testing instead.');
+    } else {
 
     const inesId = db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'limited')`
@@ -225,21 +268,12 @@ function seed() {
       }
     }
 
-    // --- Automations ---
-    const automations = [
-      ['Card about to expire', 'Texts members 7 days before their card on file expires with a link to update it.', 'Card expires in 7 days', 'SMS'],
-      ['Payment failed', 'Sends a payment link the same day a charge fails, then again after 3 days.', 'Charge fails', 'SMS'],
-      ['Trial ending', 'Reminds a trial member the day before it ends and offers the Unlimited plan.', '1 day before trial ends', 'SMS'],
-      ['Renewal in 3 days', 'Confirms the upcoming charge amount and date.', '3 days before next charge', 'Email'],
-      ['Win-back at 14 days', 'Nudges a member who has not checked in for 14 days.', 'No visit in 14 days', 'SMS'],
-    ];
-    const insertAutomation = db.prepare(
-      `INSERT INTO automations (name, description, trigger_desc, channel, enabled, sort_order) VALUES (?,?,?,?,?,?)`
-    );
-    automations.forEach((a, i) => insertAutomation.run(a[0], a[1], a[2], a[3], 1, i));
+    demoMemberCount = memberIds.length;
+    demoClassCount = classesDef.length;
+    } // end if (seedDemoData)
 
     db.exec('COMMIT');
-    console.log(`Seed complete: ${memberIds.length} members, ${classesDef.length} classes.`);
+    if (seedDemoData) console.log(`Demo data seeded: ${demoMemberCount} members, ${demoClassCount} classes.`);
     console.log(`Admin login (system access only, no member/billing data): ${adminEmail} / ${adminPassword}`);
     console.log('First launch shows a setup wizard to create your real owner account.');
 
@@ -266,7 +300,11 @@ function seed() {
 }
 
 if (require.main === module) {
-  seed();
+  // Running this file directly (`npm run seed`) is always an explicit,
+  // by-hand request for the sample dataset - force it on even if
+  // SEED_DEMO_DATA isn't set, since there'd be no other reason to run this
+  // script yourself.
+  seed({ demo: true });
 }
 
 module.exports = { seed };

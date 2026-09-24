@@ -21,8 +21,8 @@ npm run dev        # desktop app (Electron), relaunches on server file changes
 npm run dev:server # plain server only, auto-restarts on file changes
 ```
 
-The server seeds demo data on first boot (idempotent — skips if data already
-exists). It prints two precreated logins to the console:
+The server bootstraps two accounts on first boot (idempotent — skips
+entirely if any staff already exist), and prints them to the console:
 
 ```
 Admin login (system access only, no member/billing data): admin@forgeroom.gym / ForgeAdmin123!
@@ -42,6 +42,17 @@ System admin (vendor support) account created: systemadmin@forgeroom.local - pas
   `server/create-systemadmin.js` to provision a new one later (password
   rotation, or recreating one the owner removed).
 
+`npm run dev` / `npm run dev:server` also seed a full sample dataset (staff,
+plans, ~60 fake members with invoices/checkins, classes) so local
+development has something to click through — see `nodemon.json`, which sets
+`SEED_DEMO_DATA=1` for those two scripts only. `npm start`, the plain
+Electron app (`npm run electron`), and every packaged installer boot with
+**no fake data at all** — a real customer's clean install gets only the two
+accounts above and the setup wizard, never sample members/staff/classes. To
+seed the sample dataset by hand into a specific database, run
+`node server/seed.js` directly (this always seeds it, regardless of the env
+var, since running it by hand is itself the explicit request).
+
 Opening the console on a fresh install shows a **setup wizard** instead of
 a login screen, since no owner account exists yet — it walks through
 creating the real owner account, the gym's name/currency, and starting
@@ -52,9 +63,9 @@ one up and prints whichever it actually bound).
 - Owner/staff console: `http://localhost:3300/console/` — includes a
   **Settings** nav group (owner/manager only) for gym name, currency, GST,
   payment/notification provider connections, and backups.
-- Member app: `http://localhost:3300/member/` — log in with any seeded
-  member's phone number and a PIN of the last 4 digits (e.g. Priya Raghavan,
-  `+1 312 847 1928`, PIN `1928`). On boot the server also prints a LAN
+- Member app: `http://localhost:3300/member/` — log in with a member's phone
+  number and a PIN of the last 4 digits. Under `npm run dev`/`dev:server`'s
+  sample dataset, e.g. Priya Raghavan, `+1 312 847 1928`, PIN `1928`. On boot the server also prints a LAN
   address (e.g. `http://192.168.1.23:3300/member/`) — that's the one to give
   members on their own phones over the gym's wifi; `localhost` only works on
   the machine actually running the server.
