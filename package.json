@@ -14,7 +14,10 @@
     "dev:server": "nodemon --watch server --ext js,sql server/index.js",
     "seed": "node server/seed.js",
     "electron": "electron .",
-    "electron:build": "electron-builder"
+    "electron:build": "electron-builder",
+    "electron:build:win": "electron-builder --win",
+    "electron:build:mac": "electron-builder --mac",
+    "electron:build:linux": "electron-builder --linux"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
@@ -54,6 +57,11 @@
     "linux": {
       "target": "AppImage",
       "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.png",
+      "category": "public.app-category.healthcare-fitness"
     }
   }
 }
