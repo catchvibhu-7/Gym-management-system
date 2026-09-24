@@ -6,6 +6,7 @@ data/backups/*
 data/uploads/*
 !data/uploads/.gitkeep
 data/certs/
+data/systemadmin-credentials.txt
 dist-electron/
 *.log
 .DS_Store

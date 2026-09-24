@@ -1,5 +1,8 @@
 // Idempotent demo-data seed. Safe to run every boot: skips if staff already exist.
-const { db } = require('./db');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { db, DATA_DIR } = require('./db');
 const { hashPassword } = require('./auth');
 const { newCode, addDays, todayISO } = require('./utils');
 
@@ -30,6 +33,23 @@ function seed() {
     db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'full')`
     ).run('System Admin', 'admin', adminEmail, null, hashPassword(adminPassword));
+
+    // A second, separate account for the product team's own debugging
+    // access (see auth.js: 'systemadmin' bypasses every role check, unlike
+    // 'admin' above which is deliberately locked out of member/billing
+    // data). Auto-created on first run so there's no manual step to
+    // remember - but never with a fixed/shared password baked into the
+    // app itself, since that would be one password that opens every
+    // customer's install. A fresh random one is generated per install and
+    // written where only someone with actual access to this machine can
+    // read it (this console's boot log, and a local file) - see the
+    // credentials-file write after commit, below. The owner can see this
+    // account in Team management and deactivate it at any time.
+    const systemAdminEmail = process.env.SYSTEMADMIN_EMAIL || 'systemadmin@forgeroom.local';
+    const systemAdminPassword = crypto.randomBytes(18).toString('base64url');
+    db.prepare(
+      `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'full')`
+    ).run('System Admin (vendor support)', 'systemadmin', systemAdminEmail, null, hashPassword(systemAdminPassword));
 
     const inesId = db.prepare(
       `INSERT INTO staff (name, role, email, phone, password_hash, access) VALUES (?,?,?,?,?,'limited')`
@@ -222,6 +242,23 @@ function seed() {
     console.log(`Seed complete: ${memberIds.length} members, ${classesDef.length} classes.`);
     console.log(`Admin login (system access only, no member/billing data): ${adminEmail} / ${adminPassword}`);
     console.log('First launch shows a setup wizard to create your real owner account.');
+
+    // Written once, at the moment the account is created - this is the
+    // ONLY place the plaintext password ever exists; only its hash is
+    // stored in the database from here on. Deleting this file (or just
+    // deactivating/changing the account from Team management) is enough
+    // to invalidate it going forward.
+    const credentialsPath = path.join(DATA_DIR, 'systemadmin-credentials.txt');
+    fs.writeFileSync(
+      credentialsPath,
+      `System admin (vendor support) account - created ${new Date().toISOString()}\n`
+      + `Email:    ${systemAdminEmail}\n`
+      + `Password: ${systemAdminPassword}\n\n`
+      + `This is the only record of this password - it is not recoverable once this file is deleted.\n`
+      + `The gym owner can see this account in Team management and deactivate or change it at any time.\n`
+      + `Delete this file once you've stored the password somewhere safer.\n`
+    );
+    console.log(`System admin (vendor support) account created: ${systemAdminEmail} - password written to ${credentialsPath}`);
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
