@@ -8,17 +8,21 @@
 // Usage:
 //   node server/create-systemadmin.js "you@yourcompany.com"
 //
+// If debugging a packaged (Electron-installed) build rather than a plain
+// checkout, point this at that install's real data directory first (see
+// db.js's comment on why it isn't just "data/" next to the app there):
+//   Windows:  set GYM_DATA_DIR=%APPDATA%\Forge Room Owner Console
+//   macOS:    export GYM_DATA_DIR="$HOME/Library/Application Support/Forge Room Owner Console"
+//   Linux:    export GYM_DATA_DIR="$HOME/.config/Forge Room Owner Console"
+//
 // Prompts for a password interactively (not a CLI arg, so it never ends
 // up in shell history or process listings) and creates the account fresh,
 // or resets the password if one with that email already exists. The
 // account behaves like any other row in Team management once created -
 // the owner can see it, and deactivate it, at any time.
-const path = require('path');
 const readline = require('readline');
-const { DatabaseSync } = require('node:sqlite');
+const { db } = require('./db');
 const { hashPassword } = require('./auth');
-
-const DB_PATH = path.join(__dirname, '..', 'data', 'gym.db');
 
 // readline has no built-in masked-input mode, so a real terminal needs raw
 // mode: read one keystroke at a time and never echo it back, handling
@@ -69,7 +73,6 @@ async function main() {
     process.exit(1);
   }
 
-  const db = new DatabaseSync(DB_PATH);
   const existing = db.prepare('SELECT id, role FROM staff WHERE email = ?').get(email);
   if (existing) {
     if (existing.role !== 'systemadmin') {

@@ -2,8 +2,12 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const selfsigned = require('selfsigned');
+const { DATA_DIR } = require('./db');
 
-const CERT_DIR = path.join(__dirname, '..', 'data', 'certs');
+// Derived from db.js's DATA_DIR rather than __dirname directly - see that
+// file's comment on why a packaged Electron app can't just compute this
+// relative to its own (read-only, archived) source location.
+const CERT_DIR = path.join(DATA_DIR, 'certs');
 const KEY_FILE = path.join(CERT_DIR, 'selfsigned-key.pem');
 const CERT_FILE = path.join(CERT_DIR, 'selfsigned-cert.pem');
 const META_FILE = path.join(CERT_DIR, 'selfsigned-meta.json');

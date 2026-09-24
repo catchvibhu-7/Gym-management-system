@@ -2,7 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+// Packaged into an Electron .asar archive, __dirname resolves INSIDE that
+// read-only archive (".../resources/app.asar/server") - fs.mkdirSync on
+// anything under it fails outright with ENOTDIR, since app.asar is a
+// single file, not a real directory, on disk. electron/main.js sets
+// GYM_DATA_DIR to a real writable per-OS location (Electron's userData
+// path) before requiring this module; a plain `npm start`/`npm run
+// dev:server` (no Electron, no asar) never sets it, so this falls back to
+// the original relative-to-source path unchanged.
+const DATA_DIR = process.env.GYM_DATA_DIR || path.join(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'gym.db');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 

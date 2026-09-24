@@ -21,6 +21,12 @@ let httpServer = null;
 let boundPort = null;
 
 async function boot() {
+  // Must happen before requiring server/index.js (which requires db.js) -
+  // see db.js's own comment: __dirname inside the packaged app.asar isn't
+  // a real writable directory, so the server needs to be told the actual
+  // per-OS user data location instead of guessing one relative to its own
+  // (read-only, archived) source location.
+  process.env.GYM_DATA_DIR = app.getPath('userData');
   const { startServer } = require('../server/index.js');
   const { server, port } = await startServer();
   httpServer = server;

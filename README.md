@@ -86,6 +86,25 @@ setup. Closing the window shuts the embedded server down cleanly. This is
 identical on all three OSes — no platform-specific step until you build an
 actual installer, below.
 
+**Where a packaged install's data actually lives:** once installed (not
+running via `npm run dev`/`electron` from source), the app's own files are
+inside a read-only `app.asar` archive — `data/` can't just sit next to
+them the way it does in a plain checkout. `electron/main.js` points the
+server at Electron's real per-OS user-data folder instead
+(`app.getPath('userData')`, via the `GYM_DATA_DIR` env var it sets before
+starting the server):
+
+- Windows: `%APPDATA%\Forge Room Owner Console\`
+- macOS: `~/Library/Application Support/Forge Room Owner Console/`
+- Linux: `~/.config/gym-management-system/`
+
+That's where `gym.db`, `uploads/`, `certs/`, `backups/`, and
+`systemadmin-credentials.txt` actually end up for an installed app — not
+in the install directory itself (which is often read-only for a non-admin
+user anyway). Point `server/create-systemadmin.js` at one of these paths
+via the same `GYM_DATA_DIR` env var when debugging an installed build
+rather than a plain checkout.
+
 ## Building an installer, per OS
 
 `npm run electron:build` (or the OS-specific variants below) packages the
