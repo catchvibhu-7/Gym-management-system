@@ -26,23 +26,8 @@
 </div>
 
 <div id="setup-view" class="login-wrap hidden">
-  <div class="login-card">
-    <h1>Welcome to Forge Room</h1>
-    <p>Create your owner account to get started</p>
-    <p style="font-size:12px;color:var(--muted);line-height:1.5;margin:-4px 0 14px">This runs once. The precreated admin login is for system access only and can't see member or billing data.</p>
-    <div id="setup-error" class="login-error hidden"></div>
-    <form id="setup-form">
-      <label class="field">Your name
-        <input type="text" id="setup-name" autocomplete="name" required>
-      </label>
-      <label class="field">Email
-        <input type="email" id="setup-email" autocomplete="username" required>
-      </label>
-      <label class="field">Password
-        <input type="password" id="setup-password" autocomplete="new-password" placeholder="At least 8 characters" required>
-      </label>
-      <button type="submit" class="btn btn-primary" style="width:100%;padding:11px;margin-top:6px">Create owner account</button>
-    </form>
+  <div class="login-card" style="width:min(460px, 92vw)">
+    <div id="setup-body"></div>
   </div>
 </div>
 

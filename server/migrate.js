@@ -20,24 +20,43 @@ function ensureColumn(db, table, column, definition) {
 // this stays a no-op once already applied.
 function migrateStaffRoleCheck(db) {
   const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'staff'`).get();
-  if (!row || row.sql.includes("'admin'")) return;
+  if (!row || row.sql.includes("'systemadmin'")) return;
   db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
+    // Must match the CURRENT real shape of `staff`, not just the columns
+    // that existed when this migration was first written - staff_type/
+    // pt_rate_cents were added later via the ensureColumn calls below, and
+    // `INSERT INTO staff_new SELECT * FROM staff` matches by column
+    // position, so a stale, shorter list here fails outright the moment
+    // this migration actually needs to re-run on a database that already
+    // has those later columns (exactly what happened adding 'systemadmin':
+    // it hadn't re-run since staff_type/pt_rate_cents were introduced).
+    // If you add another guarded staff-table migration after this one,
+    // update this list to match whatever ensureColumn calls exist by then.
     db.exec(`
       CREATE TABLE staff_new (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        role TEXT NOT NULL CHECK (role IN ('owner','manager','coach','desk','kiosk','admin')),
+        role TEXT NOT NULL CHECK (role IN ('owner','manager','coach','desk','kiosk','admin','systemadmin')),
         email TEXT UNIQUE,
         phone TEXT,
         password_hash TEXT NOT NULL,
         access TEXT NOT NULL DEFAULT 'limited' CHECK (access IN ('full','limited')),
         active INTEGER NOT NULL DEFAULT 1,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        staff_type TEXT,
+        pt_rate_cents INTEGER
       )
     `);
-    db.exec('INSERT INTO staff_new SELECT * FROM staff');
+    const staffCols = db.prepare('PRAGMA table_info(staff)').all().map((c) => c.name);
+    const newCols = ['id', 'name', 'role', 'email', 'phone', 'password_hash', 'access', 'active', 'created_at', 'staff_type', 'pt_rate_cents'];
+    // Only copy columns staff_new actually declares - if `staff` somehow
+    // already has even newer columns than the list above at migration
+    // time, this still succeeds (extra source columns are just dropped)
+    // instead of failing the same way a bare SELECT * just did.
+    const copyCols = newCols.filter((c) => staffCols.includes(c));
+    db.exec(`INSERT INTO staff_new (${copyCols.join(',')}) SELECT ${copyCols.join(',')} FROM staff`);
     db.exec('DROP TABLE staff');
     db.exec('ALTER TABLE staff_new RENAME TO staff');
     db.exec(`

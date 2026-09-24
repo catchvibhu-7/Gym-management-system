@@ -6,8 +6,11 @@ const { initialsOf } = require('../utils');
 const router = express.Router();
 router.use(requireStaff());
 
-const ROLE_LABEL = { owner: 'Owner', manager: 'Manager', coach: 'Coach', desk: 'Desk staff', kiosk: 'Kiosk (door only)', admin: 'Admin (system only)' };
-const VALID_ROLES = ['owner', 'manager', 'coach', 'desk', 'kiosk', 'admin'];
+const ROLE_LABEL = {
+  owner: 'Owner', manager: 'Manager', coach: 'Coach', desk: 'Desk staff', kiosk: 'Kiosk (door only)', admin: 'Admin (system only)',
+  systemadmin: 'System admin (vendor support)',
+};
+const VALID_ROLES = ['owner', 'manager', 'coach', 'desk', 'kiosk', 'admin', 'systemadmin'];
 
 router.get('/', (req, res) => {
   const staff = db.prepare('SELECT * FROM staff WHERE active = 1 ORDER BY role, name').all();
@@ -51,6 +54,11 @@ router.post('/', requireStaff('owner', 'manager'), (req, res) => {
     return res.status(400).json({ error: 'Name, email, role and password are required' });
   }
   if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  // System admin is vendor support access, not a real staff role - only
+  // the owner (not a manager) gets to decide to grant it.
+  if (role === 'systemadmin' && req.staff.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the owner can create a system admin account' });
+  }
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   const existing = db.prepare('SELECT id FROM staff WHERE email = ?').get(email.trim().toLowerCase());
   if (existing) return res.status(409).json({ error: 'A staff account with this email already exists' });
@@ -69,6 +77,9 @@ router.patch('/:id', requireStaff('owner', 'manager'), (req, res) => {
   if (!staffRow) return res.status(404).json({ error: 'Not found' });
   const { name, email, phone, role, access, staffType, ptRateCents } = req.body || {};
   if (role && !VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' });
+  if ((role === 'systemadmin' || staffRow.role === 'systemadmin') && req.staff.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the owner can change a system admin account' });
+  }
   const nextEmail = email ? email.trim().toLowerCase() : staffRow.email;
   const nextStaffType = staffType !== undefined ? (staffType && staffType.trim() ? staffType.trim() : null) : staffRow.staff_type;
   const nextPtRate = ptRateCents !== undefined ? (ptRateCents !== '' && ptRateCents !== null ? Number(ptRateCents) : null) : staffRow.pt_rate_cents;
@@ -86,11 +97,19 @@ router.post('/:id/deactivate', requireStaff('owner', 'manager'), (req, res) => {
   if (Number(req.params.id) === req.staff.id) {
     return res.status(400).json({ error: "You can't deactivate your own account" });
   }
+  const target = db.prepare('SELECT role FROM staff WHERE id = ?').get(req.params.id);
+  if (target?.role === 'systemadmin' && req.staff.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the owner can deactivate a system admin account' });
+  }
   db.prepare('UPDATE staff SET active = 0 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
 router.post('/:id/reactivate', requireStaff('owner', 'manager'), (req, res) => {
+  const target = db.prepare('SELECT role FROM staff WHERE id = ?').get(req.params.id);
+  if (target?.role === 'systemadmin' && req.staff.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the owner can reactivate a system admin account' });
+  }
   db.prepare('UPDATE staff SET active = 1 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });

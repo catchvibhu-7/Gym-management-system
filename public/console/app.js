@@ -311,11 +311,177 @@
   // First run only: nobody with role='owner' exists yet, so there's no real
   // login to offer. The precreated admin account can't run the gym (see
   // auth.js's STAFF_ROLES) - it exists solely so this wizard has something
-  // to boot from. Submitting logs the new owner straight in.
+  // to boot from. Step 1 creates the owner and logs them in immediately
+  // (so a refresh mid-wizard doesn't lose that part); steps 2-3 just collect
+  // data locally and save it in one PATCH /settings call when finishing -
+  // the exact same endpoint Settings > General already uses, so nothing
+  // new had to be built server-side for the gym-profile/fee steps.
   function showSetupWizard() {
     document.getElementById('login-view').classList.add('hidden');
     document.getElementById('app-shell').classList.add('hidden');
     document.getElementById('setup-view').classList.remove('hidden');
+    state.setup = {
+      step: 1,
+      data: {
+        name: '', email: '', password: '',
+        gymName: '', gymTagline: '',
+        currencyCode: 'USD', currencySymbol: '$',
+        trialDays: 3, admissionFeeCents: 0, fobFeeCents: 0,
+        gstEnabled: false, gstNumber: '', gstPercentage: 0,
+      },
+    };
+    renderSetupWizard();
+  }
+
+  function renderSetupWizard() {
+    const s = state.setup;
+    const stepLabels = ['Owner account', 'Gym profile', 'Fees & tax', 'Done'];
+    const body = document.getElementById('setup-body');
+    body.innerHTML = `
+      <h1>Welcome to Forge Room</h1>
+      <p>${s.step <= 3 ? `Let's get your gym set up — step ${s.step} of 3` : "You're all set"}</p>
+      <div class="wizard-steps" style="margin:14px 0 18px">${stepLabels.slice(0, 3).map((l, i) => `<div class="wizard-step ${s.step > i + 1 ? 'done' : s.step === i + 1 ? 'active' : ''}"><div class="bar"></div><div class="label">${esc(l)}</div></div>`).join('')}</div>
+      <div id="setup-error" class="login-error hidden"></div>
+      <div id="setup-step-body"></div>
+      <div id="setup-step-footer" style="display:flex;gap:10px;margin-top:16px"></div>
+    `;
+    const stepBody = document.getElementById('setup-step-body');
+    const footer = document.getElementById('setup-step-footer');
+    const errBox = document.getElementById('setup-error');
+
+    if (s.step === 1) {
+      stepBody.innerHTML = `
+        <p style="font-size:12px;color:var(--muted);line-height:1.5;margin:-4px 0 14px">This runs once. The precreated admin login is for system access only and can't see member or billing data.</p>
+        <label class="field" style="margin-bottom:12px">Your name<input type="text" id="setup-name" autocomplete="name" value="${esc(s.data.name)}"></label>
+        <label class="field" style="margin-bottom:12px">Email<input type="email" id="setup-email" autocomplete="username" value="${esc(s.data.email)}"></label>
+        <label class="field">Password<input type="password" id="setup-password" autocomplete="new-password" placeholder="At least 8 characters"></label>
+      `;
+      footer.innerHTML = `<button class="btn btn-primary" style="width:100%;padding:11px" data-action="setup-next">Create owner account</button>`;
+    } else if (s.step === 2) {
+      stepBody.innerHTML = `
+        <label class="field" style="margin-bottom:12px">Gym name<input id="setup-gym-name" value="${esc(s.data.gymName)}" placeholder="Forge Room"></label>
+        <label class="field" style="margin-bottom:12px">Tagline<input id="setup-gym-tagline" value="${esc(s.data.gymTagline)}" placeholder="Strength club"></label>
+        <div class="grid-2">
+          <label class="field">Currency code
+            <select id="setup-currency-code">${CURRENCIES.map(([code]) => `<option value="${code}" ${s.data.currencyCode === code ? 'selected' : ''}>${code}</option>`).join('')}</select>
+          </label>
+          <label class="field">Currency symbol
+            <select id="setup-currency-symbol">${CURRENCY_SYMBOLS.map((sym) => `<option value="${esc(sym)}" ${s.data.currencySymbol === sym ? 'selected' : ''}>${esc(sym)}</option>`).join('')}</select>
+          </label>
+        </div>
+      `;
+      footer.innerHTML = `<button class="btn" data-action="setup-back">Back</button><button class="btn btn-primary" style="flex:1" data-action="setup-next">Continue</button>`;
+      // Kept live-synced to s.data on every keystroke - the currency-code
+      // handler below re-renders this whole step to update the symbol
+      // dropdown, which would otherwise wipe out whatever was already
+      // typed in these two fields (they'd rebuild from stale s.data).
+      document.getElementById('setup-gym-name').addEventListener('input', (e) => { s.data.gymName = e.target.value; });
+      document.getElementById('setup-gym-tagline').addEventListener('input', (e) => { s.data.gymTagline = e.target.value; });
+      document.getElementById('setup-currency-code').addEventListener('change', (e) => {
+        const match = CURRENCIES.find(([code]) => code === e.target.value);
+        if (match) { s.data.currencyCode = match[0]; s.data.currencySymbol = match[1]; renderSetupWizard(); }
+      });
+    } else if (s.step === 3) {
+      stepBody.innerHTML = `
+        <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted);line-height:1.6">These can all be changed later in Settings — just enough to get member signup working today.</p>
+        <div class="grid-2" style="margin-bottom:14px">
+          <label class="field">Trial length (days)<input id="setup-trial-days" type="number" min="1" value="${esc(s.data.trialDays)}"></label>
+          <label class="field">Fob fee<input id="setup-fob-fee" type="number" min="0" step="0.01" value="${(s.data.fobFeeCents / 100).toFixed(2)}"></label>
+        </div>
+        <label class="field" style="margin-bottom:14px">Admission fee<input id="setup-admission-fee" type="number" min="0" step="0.01" value="${(s.data.admissionFeeCents / 100).toFixed(2)}"></label>
+        <label style="display:flex;align-items:center;gap:10px;margin-bottom:12px;font-size:13px;font-weight:600">
+          <button type="button" class="toggle-track" id="setup-gst-toggle" style="background:${s.data.gstEnabled ? 'var(--accent)' : '#dcded7'}"><span class="toggle-knob" style="left:${s.data.gstEnabled ? 18 : 2}px"></span></button>
+          Charge GST on memberships and day passes
+        </label>
+        <div class="grid-2">
+          <label class="field">GST number<input id="setup-gst-number" value="${esc(s.data.gstNumber)}" placeholder="29ABCDE1234F1Z5"></label>
+          <label class="field">GST percentage<input id="setup-gst-percentage" type="number" min="0" max="100" step="0.1" value="${esc(s.data.gstPercentage)}"></label>
+        </div>
+      `;
+      footer.innerHTML = `<button class="btn" data-action="setup-back">Back</button><button class="btn btn-primary" style="flex:1" data-action="setup-finish">Finish setup</button>`;
+      document.getElementById('setup-gst-toggle').addEventListener('click', (e) => {
+        s.data.gstEnabled = !s.data.gstEnabled;
+        const btn = e.currentTarget;
+        btn.style.background = s.data.gstEnabled ? 'var(--accent)' : '#dcded7';
+        btn.querySelector('.toggle-knob').style.left = s.data.gstEnabled ? '18px' : '2px';
+      });
+    } else {
+      stepBody.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:20px 0">
+        <div style="width:50px;height:50px;border-radius:999px;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-size:22px;font-weight:700">✓</div>
+        <h2 style="font-size:18px;margin:0">${esc(s.data.gymName || 'Your gym')} is ready</h2>
+        <p style="margin:0;font-size:13px;color:var(--muted);max-width:36ch">Owner account created, gym profile and fees saved. You can fine-tune any of this later in Settings.</p>
+      </div>`;
+      footer.innerHTML = `<button class="btn btn-primary" style="width:100%;padding:11px" data-action="setup-done">Go to dashboard</button>`;
+    }
+  }
+
+  async function setupWizardNext(btnEl) {
+    const s = state.setup;
+    const errBox = document.getElementById('setup-error');
+    errBox.classList.add('hidden');
+    if (s.step === 1) {
+      s.data.name = document.getElementById('setup-name').value;
+      s.data.email = document.getElementById('setup-email').value;
+      s.data.password = document.getElementById('setup-password').value;
+      try {
+        state.staff = await withBusy(btnEl, () => api('/setup/create-owner', { method: 'POST', body: { name: s.data.name, email: s.data.email, password: s.data.password } }));
+      } catch (err) {
+        errBox.textContent = err.message;
+        errBox.classList.remove('hidden');
+        return;
+      }
+    } else if (s.step === 2) {
+      s.data.gymName = document.getElementById('setup-gym-name').value;
+      s.data.gymTagline = document.getElementById('setup-gym-tagline').value;
+      s.data.currencyCode = document.getElementById('setup-currency-code').value;
+      s.data.currencySymbol = document.getElementById('setup-currency-symbol').value;
+      if (!s.data.gymName.trim()) {
+        errBox.textContent = 'Gym name is required.';
+        errBox.classList.remove('hidden');
+        return;
+      }
+    }
+    s.step += 1;
+    renderSetupWizard();
+  }
+
+  function setupWizardBack() {
+    state.setup.step -= 1;
+    renderSetupWizard();
+  }
+
+  async function setupWizardFinish(btnEl) {
+    const s = state.setup;
+    const errBox = document.getElementById('setup-error');
+    errBox.classList.add('hidden');
+    s.data.trialDays = document.getElementById('setup-trial-days').value || '3';
+    s.data.fobFeeCents = Math.round(parseFloat(document.getElementById('setup-fob-fee').value) * 100) || 0;
+    s.data.admissionFeeCents = Math.round(parseFloat(document.getElementById('setup-admission-fee').value) * 100) || 0;
+    s.data.gstNumber = document.getElementById('setup-gst-number').value;
+    s.data.gstPercentage = document.getElementById('setup-gst-percentage').value || '0';
+    try {
+      await withBusy(btnEl, () => api('/settings', {
+        method: 'PATCH',
+        body: {
+          gym_name: s.data.gymName,
+          gym_tagline: s.data.gymTagline,
+          currency_code: s.data.currencyCode,
+          currency_symbol: s.data.currencySymbol,
+          trial_duration_days: String(s.data.trialDays),
+          fob_fee_cents: String(s.data.fobFeeCents),
+          admission_fee_cents: String(s.data.admissionFeeCents),
+          gst_enabled: s.data.gstEnabled ? '1' : '0',
+          gst_number: s.data.gstNumber,
+          gst_percentage: String(s.data.gstPercentage),
+        },
+      }));
+    } catch (err) {
+      errBox.textContent = err.message;
+      errBox.classList.remove('hidden');
+      return;
+    }
+    s.step += 1;
+    renderSetupWizard();
   }
 
   // A kiosk-role account has no console to show at all - it goes straight
@@ -394,23 +560,6 @@
     try {
       state.staff = await api('/staff/login', { method: 'POST', body: { email, password } });
       if (state.staff.role === 'kiosk') { showKioskLocked(); } else { showApp(); }
-    } catch (err) {
-      errBox.textContent = err.message;
-      errBox.classList.remove('hidden');
-    }
-  });
-
-  document.getElementById('setup-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('setup-name').value;
-    const email = document.getElementById('setup-email').value;
-    const password = document.getElementById('setup-password').value;
-    const errBox = document.getElementById('setup-error');
-    errBox.classList.add('hidden');
-    const btn = e.target.querySelector('button[type=submit]');
-    try {
-      state.staff = await withBusy(btn, () => api('/setup/create-owner', { method: 'POST', body: { name, email, password } }));
-      showApp();
     } catch (err) {
       errBox.textContent = err.message;
       errBox.classList.remove('hidden');
@@ -2363,7 +2512,14 @@
 
   function openStaffModal(staffId) {
     const editing = staffId ? (state.staffCache || []).find((s) => s.id === staffId) : null;
+    // System admin (vendor support access) is deliberately never offered as
+    // a choice here - it's only ever provisioned via server/create-
+    // systemadmin.js, never through this form. It's added to the list ONLY
+    // when editing a staff row that already has it, so the dropdown shows
+    // (and preserves) the real value instead of silently falling back to
+    // whatever option happens to be first and downgrading it on save.
     const ROLES = [['owner', 'Owner'], ['manager', 'Manager'], ['coach', 'Coach'], ['desk', 'Desk staff'], ['kiosk', 'Kiosk (door only)'], ['admin', 'Admin (system only)']];
+    if (editing?.role === 'systemadmin') ROLES.push(['systemadmin', 'System admin (vendor support)']);
     modalRoot.innerHTML = '';
     const overlay = el(`<div class="modal-overlay" id="staff-overlay"><div class="modal modal-sm">
       <div class="modal-header"><div><h2>${editing ? 'Edit staff' : 'Add staff'}</h2></div><button class="modal-close" data-action="close-modal">×</button></div>
@@ -3269,6 +3425,10 @@
     else if (action === 'open-kiosk-from-page') openKiosk();
     else if (action === 'close-kiosk') closeKiosk();
     else if (action === 'kiosk-next') renderKioskIdle();
+    else if (action === 'setup-next') setupWizardNext(a);
+    else if (action === 'setup-back') setupWizardBack();
+    else if (action === 'setup-finish') setupWizardFinish(a);
+    else if (action === 'setup-done') showApp();
     else if (action === 'ack-alert') ackAlert(Number(a.dataset.id));
     else if (action === 'ack-all-alerts') ackAllAlerts();
     else if (action === 'task-jump') {

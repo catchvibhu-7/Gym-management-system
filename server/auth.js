@@ -73,6 +73,15 @@ function destroyMemberSession(req, res) {
 const STAFF_ROLES = ['owner', 'manager', 'coach', 'desk'];
 const ALL_STAFF_ROLES = [...STAFF_ROLES, 'kiosk', 'admin'];
 
+// 'systemadmin' is a vendor support/debug role, not a real gym staff
+// member - it deliberately bypasses every role check below, on every
+// route, regardless of what's passed to requireStaff(...). It exists for
+// the product team to get into a customer's own local install when asked
+// to help debug something, never created by this app's own signup/wizard
+// flow (see server/create-systemadmin.js) - and it's a completely ordinary
+// row in the staff table otherwise, so it shows up in Team management and
+// the owner can deactivate it there like any other account whenever they
+// want to revoke that access.
 function requireStaff(...roles) {
   return (req, res, next) => {
     const token = req.cookies[STAFF_COOKIE];
@@ -82,6 +91,7 @@ function requireStaff(...roles) {
        WHERE ss.token = ? AND ss.expires_at > datetime('now') AND s.active = 1`
     ).get(token);
     if (!row) return res.status(401).json({ error: 'Session expired' });
+    if (row.role === 'systemadmin') { req.staff = row; return next(); }
     const allowed = roles.length ? roles : STAFF_ROLES;
     if (!allowed.includes(row.role)) {
       return res.status(403).json({ error: 'Not allowed for your role' });
